@@ -1,0 +1,4 @@
+interface:
+  display_name: "Python Experiment Analysis"
+  short_description: "Reproducible Python workflows for lab data"
+  default_prompt: "Use $python-experiment-analysis to inspect raw measurement files, build a parser, and implement a reproducible analysis script in this repository."
