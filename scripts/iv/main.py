@@ -6,12 +6,20 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from context import AnalysisContext
-from common import resolve_input_paths
-from iv_plot import run_iv_step
-from pr_plot import run_pr_step
-from pt_plot import run_pt_step
-from rt_plot import run_rt_step
+try:
+    from .common import resolve_input_paths
+    from .context import AnalysisContext
+    from .iv_plot import run_iv_step
+    from .pr_plot import run_pr_step
+    from .pt_plot import run_pt_step
+    from .rt_plot import run_rt_step
+except ImportError:
+    from common import resolve_input_paths
+    from context import AnalysisContext
+    from iv_plot import run_iv_step
+    from pr_plot import run_pr_step
+    from pt_plot import run_pt_step
+    from rt_plot import run_rt_step
 
 DEFAULT_OUTPUT_DIR = Path("outputs/iv")
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "default.yaml"
@@ -29,6 +37,7 @@ def add_common_step_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "-o",
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,

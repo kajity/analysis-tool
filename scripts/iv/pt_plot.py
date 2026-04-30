@@ -8,18 +8,32 @@ from pathlib import Path
 import numpy as np
 from scipy.optimize import curve_fit
 
-from common import (
-    color_for_dataset,
-    configure_plot_style,
-    export_plot,
-    filter_excluded_temperatures,
-    load_pyplot,
-    resolve_input_paths,
-    temperature_sort_key,
-)
-from context import AnalysisContext
-from iv_io import IvData, load_iv_data
-from pr_plot import PrConfig, calculate_pr, load_pr_config, normalize_resistance
+try:
+    from .common import (
+        color_for_dataset,
+        configure_plot_style,
+        export_plot,
+        filter_excluded_temperatures,
+        load_pyplot,
+        resolve_input_paths,
+        temperature_sort_key,
+    )
+    from .context import AnalysisContext
+    from .iv_io import IvData, load_iv_data
+    from .pr_plot import PrConfig, calculate_pr, load_pr_config, normalize_resistance
+except ImportError:
+    from common import (
+        color_for_dataset,
+        configure_plot_style,
+        export_plot,
+        filter_excluded_temperatures,
+        load_pyplot,
+        resolve_input_paths,
+        temperature_sort_key,
+    )
+    from context import AnalysisContext
+    from iv_io import IvData, load_iv_data
+    from pr_plot import PrConfig, calculate_pr, load_pr_config, normalize_resistance
 
 
 @dataclass(frozen=True)
@@ -36,11 +50,15 @@ class PtFitResult:
     n: float
 
 
-def thermal_model(t_bath_K: np.ndarray, tc_K: float, g0_W_per_K: float, n: float) -> np.ndarray:
+def thermal_model(
+    t_bath_K: np.ndarray, tc_K: float, g0_W_per_K: float, n: float
+) -> np.ndarray:
     return g0_W_per_K / n * (tc_K**n - t_bath_K**n)
 
 
-def thermal_model_pW(t_bath_K: np.ndarray, tc_K: float, g0_W_per_K: float, n: float) -> np.ndarray:
+def thermal_model_pW(
+    t_bath_K: np.ndarray, tc_K: float, g0_W_per_K: float, n: float
+) -> np.ndarray:
     return thermal_model(t_bath_K, tc_K, g0_W_per_K, n) * 1e12
 
 
@@ -56,7 +74,9 @@ def interpolate_pc_at_resistance_ratio(
     unique_r, unique_indices = np.unique(sorted_r, return_index=True)
     unique_p = sorted_p[unique_indices]
     if unique_r.size < 2:
-        raise ValueError("Need at least two distinct R_TES/R_N points to interpolate Pc.")
+        raise ValueError(
+            "Need at least two distinct R_TES/R_N points to interpolate Pc."
+        )
 
     if target_ratio < unique_r[0] or target_ratio > unique_r[-1]:
         raise ValueError(
@@ -67,7 +87,9 @@ def interpolate_pc_at_resistance_ratio(
     return float(np.interp(target_ratio, unique_r, unique_p))
 
 
-def build_pc_points(datasets, config: PrConfig, raw_voltage: bool, target_ratio: float) -> list[CriticalPowerPoint]:
+def build_pc_points(
+    datasets, config: PrConfig, raw_voltage: bool, target_ratio: float
+) -> list[CriticalPowerPoint]:
     points: list[CriticalPowerPoint] = []
     for path, iv_data in datasets:
         if iv_data.temperature_mK is None:
@@ -76,7 +98,11 @@ def build_pc_points(datasets, config: PrConfig, raw_voltage: bool, target_ratio:
         r_tes_ohm, p_b_w = calculate_pr(iv_data, config, raw_voltage)
         ratio = normalize_resistance(r_tes_ohm)
         pc_w = interpolate_pc_at_resistance_ratio(ratio, p_b_w, target_ratio)
-        points.append(CriticalPowerPoint(temperature_mK=iv_data.temperature_mK, pc_w=pc_w, iv_data=iv_data))
+        points.append(
+            CriticalPowerPoint(
+                temperature_mK=iv_data.temperature_mK, pc_w=pc_w, iv_data=iv_data
+            )
+        )
 
     if len(points) < 3:
         raise ValueError("Need at least three temperature points to fit Tc, G0, and n.")
@@ -84,12 +110,17 @@ def build_pc_points(datasets, config: PrConfig, raw_voltage: bool, target_ratio:
 
 
 def fit_pc_temperature(points: list[CriticalPowerPoint]) -> PtFitResult:
-    t_bath_K = np.asarray([point.temperature_mK * 1e-3 for point in points], dtype=float)
+    t_bath_K = np.asarray(
+        [point.temperature_mK * 1e-3 for point in points], dtype=float
+    )
     pc_pW = np.asarray([point.pc_w * 1e12 for point in points], dtype=float)
 
     initial_tc = float(np.max(t_bath_K) * 1.05)
     initial_n = 3.0
-    denominator = max(initial_tc**initial_n - float(np.min(t_bath_K)) ** initial_n, np.finfo(float).eps)
+    denominator = max(
+        initial_tc**initial_n - float(np.min(t_bath_K)) ** initial_n,
+        np.finfo(float).eps,
+    )
     initial_g0 = float(initial_n * np.max(pc_pW) * 1e-12 / denominator)
 
     lower_bounds = [float(np.max(t_bath_K) * 1.0001), 0.0, 0.5]
@@ -102,10 +133,14 @@ def fit_pc_temperature(points: list[CriticalPowerPoint]) -> PtFitResult:
         bounds=(lower_bounds, upper_bounds),
         maxfev=20000,
     )
-    return PtFitResult(tc_K=float(params[0]), g0_W_per_K=float(params[1]), n=float(params[2]))
+    return PtFitResult(
+        tc_K=float(params[0]), g0_W_per_K=float(params[1]), n=float(params[2])
+    )
 
 
-def plot_pt(plt, points: list[CriticalPowerPoint], fit: PtFitResult, target_ratio: float):
+def plot_pt(
+    plt, points: list[CriticalPowerPoint], fit: PtFitResult, target_ratio: float
+):
     configure_plot_style(plt)
     fig, ax = plt.subplots(figsize=(7.2, 5.6), constrained_layout=True)
 
@@ -121,7 +156,9 @@ def plot_pt(plt, points: list[CriticalPowerPoint], fit: PtFitResult, target_rati
             label=f"{point.temperature_mK:g} mK",
         )
 
-    t_bath_mK = np.asarray([point.temperature_mK for point in sorted_points], dtype=float)
+    t_bath_mK = np.asarray(
+        [point.temperature_mK for point in sorted_points], dtype=float
+    )
     fit_t_mK = np.linspace(float(np.min(t_bath_mK)), float(np.max(t_bath_mK)), 300)
     fit_pc_pW = thermal_model(fit_t_mK * 1e-3, fit.tc_K, fit.g0_W_per_K, fit.n) * 1e12
     ax.plot(fit_t_mK, fit_pc_pW, linewidth=2, label="fit")
@@ -135,9 +172,12 @@ def plot_pt(plt, points: list[CriticalPowerPoint], fit: PtFitResult, target_rati
         0.02,
         0.02,
         (
-            rf"$R_{{TES}}/R_N={target_ratio:g}$" "\n"
-            rf"$T_c={fit.tc_K * 1e3:.4g}\ \mathrm{{mK}}$" "\n"
-            rf"$G_0={fit.g0_W_per_K:.4g}\ \mathrm{{W/K}}$" "\n"
+            rf"$R_{{TES}}/R_N={target_ratio:g}$"
+            "\n"
+            rf"$T_c={fit.tc_K * 1e3:.4g}\ \mathrm{{mK}}$"
+            "\n"
+            rf"$G_0={fit.g0_W_per_K:.4g}\ \mathrm{{W/K}}$"
+            "\n"
             rf"$n={fit.n:.4g}$"
         ),
         transform=ax.transAxes,
@@ -147,7 +187,12 @@ def plot_pt(plt, points: list[CriticalPowerPoint], fit: PtFitResult, target_rati
     return fig
 
 
-def export_fit_summary(output_dir: Path, fit: PtFitResult, points: list[CriticalPowerPoint], target_ratio: float) -> Path:
+def export_fit_summary(
+    output_dir: Path,
+    fit: PtFitResult,
+    points: list[CriticalPowerPoint],
+    target_ratio: float,
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "pt_fit_parameters.txt"
     lines = [
@@ -159,12 +204,16 @@ def export_fit_summary(output_dir: Path, fit: PtFitResult, points: list[Critical
         "Sampled Pc points:",
     ]
     for point in points:
-        lines.append(f"T_bath = {point.temperature_mK:.12g} [mK], Pc = {point.pc_w:.12g} [W]")
+        lines.append(
+            f"T_bath = {point.temperature_mK:.12g} [mK], Pc = {point.pc_w:.12g} [W]"
+        )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return output_path
 
 
-def run_pt_step(args: argparse.Namespace, context: AnalysisContext | None = None) -> int:
+def run_pt_step(
+    args: argparse.Namespace, context: AnalysisContext | None = None
+) -> int:
     if context is None:
         context = AnalysisContext()
 

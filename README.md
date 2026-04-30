@@ -22,6 +22,20 @@ uv run python scripts\iv\main.py pt data\iv
 uv run python scripts\iv\main.py rt data\iv
 ```
 
+Install the analysis commands as uv tools:
+
+```powershell
+uv tool install .
+```
+
+After installation, use:
+
+```powershell
+ates.iv data\iv
+ates.iv rt data\iv -e 100 -e 110 --ratio 0.5
+ates.thickness path\to\profile.txt
+```
+
 When the step is omitted, the script runs `iv`, `pr`, `pt`, and `rt` in order.
 After the `iv` plot, it asks on the command line which temperatures should be
 excluded from `pr` and later steps. You can also specify exclusions directly:

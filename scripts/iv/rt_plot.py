@@ -6,20 +6,36 @@ from pathlib import Path
 
 import numpy as np
 
-from common import (
-    color_for_dataset,
-    configure_plot_style,
-    export_plot,
-    filter_excluded_temperatures,
-    label_for,
-    load_pyplot,
-    resolve_input_paths,
-    temperature_sort_key,
-)
-from context import AnalysisContext
-from iv_io import IvData, load_iv_data
-from pr_plot import PrConfig, calculate_pr, load_pr_config
-from pt_plot import PtFitResult, build_pc_points, fit_pc_temperature
+try:
+    from .common import (
+        color_for_dataset,
+        configure_plot_style,
+        export_plot,
+        filter_excluded_temperatures,
+        label_for,
+        load_pyplot,
+        resolve_input_paths,
+        temperature_sort_key,
+    )
+    from .context import AnalysisContext
+    from .iv_io import IvData, load_iv_data
+    from .pr_plot import PrConfig, calculate_pr, load_pr_config
+    from .pt_plot import PtFitResult, build_pc_points, fit_pc_temperature
+except ImportError:
+    from common import (
+        color_for_dataset,
+        configure_plot_style,
+        export_plot,
+        filter_excluded_temperatures,
+        label_for,
+        load_pyplot,
+        resolve_input_paths,
+        temperature_sort_key,
+    )
+    from context import AnalysisContext
+    from iv_io import IvData, load_iv_data
+    from pr_plot import PrConfig, calculate_pr, load_pr_config
+    from pt_plot import PtFitResult, build_pc_points, fit_pc_temperature
 
 
 def calculate_t_tes(
@@ -97,7 +113,9 @@ def get_pt_fit_for_rt(
     return fit_pc_temperature(pc_points), False
 
 
-def run_rt_step(args: argparse.Namespace, context: AnalysisContext | None = None) -> int:
+def run_rt_step(
+    args: argparse.Namespace, context: AnalysisContext | None = None
+) -> int:
     if context is None:
         context = AnalysisContext()
 

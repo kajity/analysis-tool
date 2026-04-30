@@ -9,7 +9,10 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.widgets import Button, SpanSelector
 
-from analysis import SelectionStats, selection_from_range, summarize_thickness
+try:
+    from .analysis import SelectionStats, selection_from_range, summarize_thickness
+except ImportError:
+    from analysis import SelectionStats, selection_from_range, summarize_thickness
 
 
 @dataclass
@@ -94,7 +97,9 @@ def launch_thickness_ui(
         nonlocal high_spans, low_spans
         high_spans = _draw_spans(ax_high, high_regions, "tab:red", 0.22, high_spans)
         low_spans = _draw_spans(ax_low, low_regions, "tab:green", 0.22, low_spans)
-        info_text.set_text(summarize_thickness(high_regions, low_regions, y, max_history))
+        info_text.set_text(
+            summarize_thickness(high_regions, low_regions, y, max_history)
+        )
         fig.canvas.draw_idle()
 
     def add_selection(target: str, xmin: float, xmax: float) -> None:

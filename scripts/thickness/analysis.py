@@ -110,8 +110,12 @@ def summarize_thickness(
         thickness_variance = high_variance**2 + low_variance**2
         thickness_sigma = float(np.sqrt(thickness_variance))
 
-        print(f"High mean: {high_mean:.3f}, variance: {high_variance:.3f}, n: {high_values.size}")
-        print(f"Background mean: {low_mean:.3f}, variance: {low_variance:.3f}, n: {low_values.size}")
+        print(
+            f"High mean: {high_mean:.3f}, variance: {high_variance:.3f}, n: {high_values.size}"
+        )
+        print(
+            f"Background mean: {low_mean:.3f}, variance: {low_variance:.3f}, n: {low_values.size}"
+        )
         print(f"Thickness: {thickness_mean:.2f} ± {thickness_sigma:.2f}")
 
         lines.append("")

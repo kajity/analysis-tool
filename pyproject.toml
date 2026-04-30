@@ -1,5 +1,5 @@
 [project]
-name = "analysis-tool"
+name = "ates"
 version = "0.1.0"
 description = "Reproducible Python analysis workflows for experimental data."
 readme = "README.md"
@@ -11,5 +11,24 @@ dependencies = [
     "scipy>=1.17.1",
 ]
 
-[tool.uv]
-package = false
+[project.scripts]
+"ates.iv" = "scripts.iv.main:main"
+"ates.thickness" = "scripts.thickness.main:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["scripts*"]
+
+[tool.setuptools.package-data]
+"scripts.iv" = ["config/*.yaml"]
+
+[tool.black]
+target-version = ["py312"]
+
+[dependency-groups]
+dev = [
+    "black>=26.3.1",
+]

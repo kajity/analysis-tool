@@ -5,8 +5,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from profile_io import load_dektak_profile
-from ui import launch_thickness_ui
+try:
+    from .profile_io import load_dektak_profile
+    from .ui import launch_thickness_ui
+except ImportError:
+    from profile_io import load_dektak_profile
+    from ui import launch_thickness_ui
 
 
 def parse_args() -> argparse.Namespace:

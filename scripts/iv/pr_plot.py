@@ -8,18 +8,32 @@ from pathlib import Path
 import numpy as np
 from omegaconf import MISSING, OmegaConf
 
-from common import (
-    color_for_dataset,
-    configure_plot_style,
-    export_plot,
-    filter_excluded_temperatures,
-    label_for,
-    load_pyplot,
-    resolve_input_paths,
-    temperature_sort_key,
-    voltage_for_plot,
-)
-from iv_io import IvData, load_iv_data
+try:
+    from .common import (
+        color_for_dataset,
+        configure_plot_style,
+        export_plot,
+        filter_excluded_temperatures,
+        label_for,
+        load_pyplot,
+        resolve_input_paths,
+        temperature_sort_key,
+        voltage_for_plot,
+    )
+    from .iv_io import IvData, load_iv_data
+except ImportError:
+    from common import (
+        color_for_dataset,
+        configure_plot_style,
+        export_plot,
+        filter_excluded_temperatures,
+        label_for,
+        load_pyplot,
+        resolve_input_paths,
+        temperature_sort_key,
+        voltage_for_plot,
+    )
+    from iv_io import IvData, load_iv_data
 
 
 @dataclass
@@ -51,9 +65,7 @@ def load_pr_config(args: argparse.Namespace) -> PrConfig:
     }
     clean_overrides = {
         "pr": {
-            key: value
-            for key, value in overrides["pr"].items()
-            if value is not None
+            key: value for key, value in overrides["pr"].items() if value is not None
         }
     }
     config = OmegaConf.merge(config, clean_overrides)
@@ -78,7 +90,9 @@ def load_pr_config(args: argparse.Namespace) -> PrConfig:
     return typed_config.pr
 
 
-def calculate_pr(iv_data: IvData, config: PrConfig, raw_voltage: bool) -> tuple[np.ndarray, np.ndarray]:
+def calculate_pr(
+    iv_data: IvData, config: PrConfig, raw_voltage: bool
+) -> tuple[np.ndarray, np.ndarray]:
     xi = config.M_in / config.M_FB * config.R_FB
     voltage_v = voltage_for_plot(iv_data, raw_voltage)
     i_tes_a = voltage_v / xi
@@ -96,7 +110,9 @@ def calculate_pr(iv_data: IvData, config: PrConfig, raw_voltage: bool) -> tuple[
 
 def normalize_resistance(r_tes_ohm: np.ndarray) -> np.ndarray:
     if r_tes_ohm.size == 0:
-        raise ValueError("Cannot normalize R_TES because no valid R_TES points were calculated.")
+        raise ValueError(
+            "Cannot normalize R_TES because no valid R_TES points were calculated."
+        )
 
     r_normal = float(np.max(r_tes_ohm))
     if r_normal <= 0:
@@ -104,7 +120,9 @@ def normalize_resistance(r_tes_ohm: np.ndarray) -> np.ndarray:
     return r_tes_ohm / r_normal
 
 
-def plot_pr(plt, datasets: list[tuple[Path, IvData]], config: PrConfig, raw_voltage: bool):
+def plot_pr(
+    plt, datasets: list[tuple[Path, IvData]], config: PrConfig, raw_voltage: bool
+):
     configure_plot_style(plt)
     fig, ax = plt.subplots(figsize=(7.2, 5.6), constrained_layout=True)
 

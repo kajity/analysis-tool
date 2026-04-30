@@ -6,7 +6,6 @@ import re
 
 import numpy as np
 
-
 TEMPERATURE_PATTERN = re.compile(r"([-+]?\d+(?:\.\d+)?)\s*mK", re.IGNORECASE)
 
 

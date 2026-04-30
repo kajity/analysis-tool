@@ -4,17 +4,30 @@ import argparse
 import sys
 from pathlib import Path
 
-from common import (
-    color_for_dataset,
-    configure_plot_style,
-    export_plot,
-    label_for,
-    load_pyplot,
-    resolve_input_paths,
-    temperature_sort_key,
-    voltage_for_plot,
-)
-from iv_io import IvData, load_iv_data
+try:
+    from .common import (
+        color_for_dataset,
+        configure_plot_style,
+        export_plot,
+        label_for,
+        load_pyplot,
+        resolve_input_paths,
+        temperature_sort_key,
+        voltage_for_plot,
+    )
+    from .iv_io import IvData, load_iv_data
+except ImportError:
+    from common import (
+        color_for_dataset,
+        configure_plot_style,
+        export_plot,
+        label_for,
+        load_pyplot,
+        resolve_input_paths,
+        temperature_sort_key,
+        voltage_for_plot,
+    )
+    from iv_io import IvData, load_iv_data
 
 
 def plot_iv(plt, datasets: list[tuple[Path, IvData]], raw_voltage: bool):

@@ -5,8 +5,10 @@ from pathlib import Path
 
 import numpy as np
 
-from iv_io import IvData
-
+try:
+    from .iv_io import IvData
+except ImportError:
+    from iv_io import IvData
 
 TEMPERATURE_COLORS = {
     100: "#000080",
@@ -98,10 +100,15 @@ def normalize_excluded_temperatures(exclude: list[float] | None) -> list[float]:
     return [float(value) for value in exclude]
 
 
-def is_excluded_temperature(temperature_mK: float | None, exclude: list[float] | None) -> bool:
+def is_excluded_temperature(
+    temperature_mK: float | None, exclude: list[float] | None
+) -> bool:
     if temperature_mK is None:
         return False
-    return any(np.isclose(temperature_mK, value, rtol=0, atol=1e-6) for value in normalize_excluded_temperatures(exclude))
+    return any(
+        np.isclose(temperature_mK, value, rtol=0, atol=1e-6)
+        for value in normalize_excluded_temperatures(exclude)
+    )
 
 
 def filter_excluded_temperatures(

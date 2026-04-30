@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 NUMBER_PATTERN = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?")
 
 
@@ -80,9 +79,7 @@ def load_dektak_profile(path: Path) -> tuple[np.ndarray, np.ndarray]:
 
     y = np.asarray(values, dtype=float)
     if num_points is not None and num_points != len(y):
-        raise ValueError(
-            f"NumPts={num_points} but parsed {len(y)} points from {path}"
-        )
+        raise ValueError(f"NumPts={num_points} but parsed {len(y)} points from {path}")
 
     if step_size is None:
         x = np.arange(len(y), dtype=float)

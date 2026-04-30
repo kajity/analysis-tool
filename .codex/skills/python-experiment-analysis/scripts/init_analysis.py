@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
         help="Path to a raw data file or directory.",
     )
     parser.add_argument(
+        "-o",
         "--output-dir",
         type=Path,
         default=Path("outputs/{analysis_name}"),
