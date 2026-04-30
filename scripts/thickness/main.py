@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from profile_io import load_dektak_profile
@@ -34,10 +35,25 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.input is None:
-        print("Error: No input file provided.")
+        print("Error: No input file provided.", file=sys.stderr)
         return 1
-    x, y = load_dektak_profile(args.input.resolve())
-    launch_thickness_ui(x, y, args.input, args.max)
+
+    input_path = args.input.resolve()
+    if not input_path.exists():
+        print(f"Error: Input file not found: {input_path}", file=sys.stderr)
+        return 1
+
+    if not input_path.is_file():
+        print(f"Error: Input path is not a file: {input_path}", file=sys.stderr)
+        return 1
+
+    try:
+        x, y = load_dektak_profile(input_path)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+
+    launch_thickness_ui(x, y, input_path, args.max)
     return 0
 
 
