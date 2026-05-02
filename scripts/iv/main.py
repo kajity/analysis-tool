@@ -21,9 +21,10 @@ except ImportError:
     from pt_plot import run_pt_step
     from rt_plot import run_rt_step
 
-DEFAULT_OUTPUT_DIR = Path("outputs/iv")
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "default.yaml"
+DEFAULT_OUTPUT_DIR = Path("outputs")
+DEFAULT_CONFIG_FILE = Path("config.yaml")
 STEP_NAMES = ("all", "iv", "pr", "pt", "rt")
+CONFIG_STEPS = ("all", "pr", "pt", "rt")
 
 
 def add_common_step_arguments(parser: argparse.ArgumentParser) -> None:
@@ -61,10 +62,10 @@ def add_iv_options(parser: argparse.ArgumentParser) -> None:
 
 def add_pr_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "-c",
         "--config",
         type=Path,
-        default=DEFAULT_CONFIG_PATH,
-        help=f"OmegaConf YAML file for PR parameters. Default: {DEFAULT_CONFIG_PATH}",
+        help=f"OmegaConf YAML file for PR parameters. Default: {DEFAULT_CONFIG_FILE}",
     )
     parser.add_argument(
         "--r-sh", type=float, default=None, help="Override R_sh in ohm."
@@ -85,10 +86,14 @@ def add_post_iv_options(parser: argparse.ArgumentParser) -> None:
         "-e",
         "--exclude",
         type=float,
-        action="append",
+        nargs="+",
+        action="extend",
         default=[],
         metavar="TEMP_MK",
-        help="Exclude a temperature in mK from pr and later steps. Can be specified multiple times.",
+        help=(
+            "Exclude temperatures in mK from pr and later steps. "
+            "Accepts multiple values and can be specified multiple times."
+        ),
     )
 
 
@@ -97,9 +102,36 @@ def add_pt_options(parser: argparse.ArgumentParser) -> None:
         "-r",
         "--ratio",
         type=float,
-        default=0.5,
+        default=0.3,
         help="R_TES/R_N value used to sample one P_b value per temperature. Default: 0.5.",
     )
+
+
+def default_config_path_for_inputs(inputs: list[Path]) -> Path:
+    if not inputs:
+        return DEFAULT_CONFIG_FILE
+
+    first_input = inputs[0]
+    raw_input = str(first_input)
+    if any(character in raw_input for character in "*?[]"):
+        return first_input.parent / DEFAULT_CONFIG_FILE
+
+    if first_input.exists():
+        if first_input.is_file():
+            return first_input.parent / DEFAULT_CONFIG_FILE
+        return first_input / DEFAULT_CONFIG_FILE
+
+    if first_input.suffix:
+        return first_input.parent / DEFAULT_CONFIG_FILE
+    return first_input / DEFAULT_CONFIG_FILE
+
+
+def resolve_config_argument(args: argparse.Namespace) -> None:
+    if args.step not in CONFIG_STEPS:
+        return
+
+    if getattr(args, "config", None) is None:
+        args.config = default_config_path_for_inputs(args.inputs)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -173,6 +205,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(args_list)
     if args.step is None:
         parser.error("inputs are required when no step is specified.")
+    resolve_config_argument(args)
     return args
 
 

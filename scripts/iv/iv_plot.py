@@ -41,7 +41,7 @@ def plot_iv(plt, datasets: list[tuple[Path, IvData]], raw_voltage: bool):
             linestyle="None",
             marker="o",
             markersize=4,
-            color=color_for_dataset(plt, index, len(datasets), iv_data),
+            color=color_for_dataset(plt, index, len(datasets)),
             label=label_for(path, iv_data),
         )
 

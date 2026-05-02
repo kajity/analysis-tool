@@ -48,6 +48,9 @@ class PtFitResult:
     tc_K: float
     g0_W_per_K: float
     n: float
+    tc_K_err: float | None = None
+    g0_W_per_K_err: float | None = None
+    n_err: float | None = None
 
 
 def thermal_model(
@@ -60,6 +63,92 @@ def thermal_model_pW(
     t_bath_K: np.ndarray, tc_K: float, g0_W_per_K: float, n: float
 ) -> np.ndarray:
     return thermal_model(t_bath_K, tc_K, g0_W_per_K, n) * 1e12
+
+
+def covariance_standard_error(
+    covariance: np.ndarray, parameter_index: int
+) -> float | None:
+    try:
+        variance = float(covariance[parameter_index, parameter_index])
+    except (IndexError, TypeError, ValueError):
+        return None
+
+    if not np.isfinite(variance) or variance < 0:
+        return None
+    return float(np.sqrt(variance))
+
+
+def format_value_with_error(
+    value: float,
+    error: float | None,
+    *,
+    scale: float = 1.0,
+    unit: str = "",
+    precision: int = 6,
+) -> str:
+    scaled_value = value * scale
+    suffix = f" {unit}" if unit else ""
+    if error is None:
+        return f"{scaled_value:.{precision}g}{suffix}"
+
+    scaled_error = error * scale
+    if not np.isfinite(scaled_error):
+        return f"{scaled_value:.{precision}g}{suffix}"
+    return f"{scaled_value:.{precision}g} +/- {scaled_error:.{precision}g}{suffix}"
+
+
+def format_fit_result_lines(fit: PtFitResult, precision: int = 6) -> list[str]:
+    return [
+        "Tc = "
+        + format_value_with_error(
+            fit.tc_K, fit.tc_K_err, scale=1e3, unit="mK", precision=precision
+        ),
+        "G0 = "
+        + format_value_with_error(
+            fit.g0_W_per_K,
+            fit.g0_W_per_K_err,
+            unit="W/K",
+            precision=precision,
+        ),
+        "n = " + format_value_with_error(fit.n, fit.n_err, precision=precision),
+    ]
+
+
+def latex_number(value: float, precision: int = 4) -> str:
+    if not np.isfinite(value):
+        return str(value)
+
+    if value == 0:
+        return "0"
+
+    abs_value = abs(value)
+    if 1e-3 <= abs_value < 1e4:
+        return f"{value:.{precision}g}"
+
+    mantissa, exponent = f"{value:.{precision}e}".split("e")
+    return rf"{float(mantissa):.{precision}g}\times10^{{{int(exponent)}}}"
+
+
+def latex_value_with_error(
+    value: float,
+    error: float | None,
+    *,
+    scale: float = 1.0,
+    unit: str = "",
+    precision: int = 4,
+) -> str:
+    scaled_value = value * scale
+    unit_text = rf"\ \mathrm{{{unit}}}" if unit else ""
+    if error is None:
+        return rf"{latex_number(scaled_value, precision)}{unit_text}"
+
+    scaled_error = error * scale
+    if not np.isfinite(scaled_error):
+        return rf"{latex_number(scaled_value, precision)}{unit_text}"
+    return (
+        rf"{latex_number(scaled_value, precision)}"
+        rf"\pm{latex_number(scaled_error, precision)}{unit_text}"
+    )
 
 
 def interpolate_pc_at_resistance_ratio(
@@ -125,7 +214,7 @@ def fit_pc_temperature(points: list[CriticalPowerPoint]) -> PtFitResult:
 
     lower_bounds = [float(np.max(t_bath_K) * 1.0001), 0.0, 0.5]
     upper_bounds = [1.0, np.inf, 10.0]
-    params, _ = curve_fit(
+    popt, pcov = curve_fit(
         thermal_model_pW,
         t_bath_K,
         pc_pW,
@@ -134,7 +223,12 @@ def fit_pc_temperature(points: list[CriticalPowerPoint]) -> PtFitResult:
         maxfev=20000,
     )
     return PtFitResult(
-        tc_K=float(params[0]), g0_W_per_K=float(params[1]), n=float(params[2])
+        tc_K=float(popt[0]),
+        g0_W_per_K=float(popt[1]),
+        n=float(popt[2]),
+        tc_K_err=covariance_standard_error(pcov, 0),
+        g0_W_per_K_err=covariance_standard_error(pcov, 1),
+        n_err=covariance_standard_error(pcov, 2),
     )
 
 
@@ -152,7 +246,7 @@ def plot_pt(
             linestyle="None",
             marker="o",
             markersize=7,
-            color=color_for_dataset(plt, index, len(sorted_points), point.iv_data),
+            color=color_for_dataset(plt, index, len(sorted_points)),
             label=f"{point.temperature_mK:g} mK",
         )
 
@@ -174,11 +268,11 @@ def plot_pt(
         (
             rf"$R_{{TES}}/R_N={target_ratio:g}$"
             "\n"
-            rf"$T_c={fit.tc_K * 1e3:.4g}\ \mathrm{{mK}}$"
+            rf"$T_c={latex_value_with_error(fit.tc_K, fit.tc_K_err, scale=1e3, unit='mK')}$"
             "\n"
-            rf"$G_0={fit.g0_W_per_K:.4g}\ \mathrm{{W/K}}$"
+            rf"$G_0={latex_value_with_error(fit.g0_W_per_K, fit.g0_W_per_K_err, unit='W/K')}$"
             "\n"
-            rf"$n={fit.n:.4g}$"
+            rf"$n={latex_value_with_error(fit.n, fit.n_err)}$"
         ),
         transform=ax.transAxes,
         fontsize=10,
@@ -197,9 +291,18 @@ def export_fit_summary(
     output_path = output_dir / "pt_fit_parameters.txt"
     lines = [
         f"R_TES/R_N target = {target_ratio:g}",
-        f"Tc = {fit.tc_K * 1e3:.12g} [mK]",
-        f"G0 = {fit.g0_W_per_K:.12g} [W/K]",
-        f"n = {fit.n:.12g}",
+        "Tc = "
+        + format_value_with_error(
+            fit.tc_K, fit.tc_K_err, scale=1e3, unit="[mK]", precision=12
+        ),
+        "G0 = "
+        + format_value_with_error(
+            fit.g0_W_per_K,
+            fit.g0_W_per_K_err,
+            unit="[W/K]",
+            precision=12,
+        ),
+        "n = " + format_value_with_error(fit.n, fit.n_err, precision=12),
         "",
         "Sampled Pc points:",
     ]
@@ -234,9 +337,8 @@ def run_pt_step(
         summary_path = export_fit_summary(args.output_dir, fit, points, args.ratio)
         print(f"Saved PT plot: {output_path}")
         print(f"Saved PT fit summary: {summary_path}")
-        print(f"Tc = {fit.tc_K * 1e3:.6g} mK")
-        print(f"G0 = {fit.g0_W_per_K:.6g} W/K")
-        print(f"n = {fit.n:.6g}")
+        for line in format_fit_result_lines(fit):
+            print(line)
 
         if args.show:
             plt.show()

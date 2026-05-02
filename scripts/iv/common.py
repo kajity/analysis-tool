@@ -10,16 +10,6 @@ try:
 except ImportError:
     from iv_io import IvData
 
-TEMPERATURE_COLORS = {
-    100: "#000080",
-    110: "#0033ff",
-    120: "#00c8ff",
-    130: "#66ee66",
-    140: "#ffd400",
-    150: "#ff5a00",
-    160: "#d7191c",
-}
-
 
 def load_pyplot(show: bool):
     if not show:
@@ -146,16 +136,14 @@ def voltage_for_plot(iv_data: IvData, raw_voltage: bool) -> np.ndarray:
     return iv_data.voltage_V - iv_data.voltage_V[zero_current_index]
 
 
-def color_for_dataset(plt, index: int, total: int, iv_data: IvData):
-    if iv_data.temperature_mK is not None:
-        temperature_key = int(round(iv_data.temperature_mK))
-        if temperature_key in TEMPERATURE_COLORS:
-            return TEMPERATURE_COLORS[temperature_key]
-
+def color_for_dataset(plt, index: int, total: int):
     colormap = plt.get_cmap("turbo")
     if total == 1:
-        return colormap(0.5)
-    return colormap(index / (total - 1))
+        position = 0.5
+    else:
+        ratio = index / (total - 1)
+        position = 0.06 + ratio * (0.88 - 0.06)
+    return colormap(position)
 
 
 def export_plot(fig, output_dir: Path, output_name: str) -> Path:

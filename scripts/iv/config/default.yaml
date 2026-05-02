@@ -1,8 +1,0 @@
-# SI units:
-# R_sh, R_FB: ohm
-# M_in, M_FB: henry
-pr:
-  R_sh: 0.003
-  R_FB: 100000.0
-  M_in: 104.12e-12
-  M_FB: 85.21e-12

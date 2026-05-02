@@ -20,7 +20,12 @@ try:
     from .context import AnalysisContext
     from .iv_io import IvData, load_iv_data
     from .pr_plot import PrConfig, calculate_pr, load_pr_config
-    from .pt_plot import PtFitResult, build_pc_points, fit_pc_temperature
+    from .pt_plot import (
+        PtFitResult,
+        build_pc_points,
+        fit_pc_temperature,
+        format_fit_result_lines,
+    )
 except ImportError:
     from common import (
         color_for_dataset,
@@ -35,7 +40,12 @@ except ImportError:
     from context import AnalysisContext
     from iv_io import IvData, load_iv_data
     from pr_plot import PrConfig, calculate_pr, load_pr_config
-    from pt_plot import PtFitResult, build_pc_points, fit_pc_temperature
+    from pt_plot import (
+        PtFitResult,
+        build_pc_points,
+        fit_pc_temperature,
+        format_fit_result_lines,
+    )
 
 
 def calculate_t_tes(
@@ -88,7 +98,7 @@ def plot_rt(
             linestyle="None",
             marker="o",
             markersize=3.5,
-            color=color_for_dataset(plt, index, len(datasets), iv_data),
+            color=color_for_dataset(plt, index, len(datasets)),
             label=label_for(path, iv_data),
         )
 
@@ -133,10 +143,9 @@ def run_rt_step(
         output_path = export_plot(fig, args.output_dir, "rt_rtes_ttes.png")
         print(f"Saved RT plot: {output_path}")
         source = "reused PT step fit" if reused_pt_fit else "new PT fit"
-        print(
-            f"Using {source}: Tc = {fit.tc_K * 1e3:.6g} mK, "
-            f"G0 = {fit.g0_W_per_K:.6g} W/K, n = {fit.n:.6g}"
-        )
+        print(f"Using {source}:")
+        for line in format_fit_result_lines(fit):
+            print(f"  {line}")
 
         if args.show:
             plt.show()
