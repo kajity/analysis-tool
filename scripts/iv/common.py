@@ -4,6 +4,7 @@ import glob
 from pathlib import Path
 
 import numpy as np
+from matplotlib import font_manager
 
 try:
     from .iv_io import IvData
@@ -120,9 +121,21 @@ def filter_excluded_temperatures(
 
 
 def configure_plot_style(plt) -> None:
+    preferred_fonts = [
+        "Noto Sans CJK JP",
+        "Yu Gothic",
+        "Meiryo",
+        "MS Gothic",
+        "DejaVu Sans",
+    ]
+    available_fonts = {font.name for font in font_manager.fontManager.ttflist}
+    font_family = [font for font in preferred_fonts if font in available_fonts]
+    if not font_family:
+        font_family = ["sans-serif"]
+
     plt.rcParams.update(
         {
-            "font.family": ["Yu Gothic", "Meiryo", "MS Gothic", "DejaVu Sans"],
+            "font.family": font_family,
             "axes.unicode_minus": False,
         }
     )
