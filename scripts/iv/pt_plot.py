@@ -177,7 +177,11 @@ def interpolate_pc_at_resistance_ratio(
 
 
 def build_pc_points(
-    datasets, config: PrConfig, raw_voltage: bool, target_ratio: float
+    datasets,
+    config: PrConfig,
+    raw_voltage: bool,
+    target_ratio: float,
+    min_points: int = 3,
 ) -> list[CriticalPowerPoint]:
     points: list[CriticalPowerPoint] = []
     for path, iv_data in datasets:
@@ -193,8 +197,10 @@ def build_pc_points(
             )
         )
 
-    if len(points) < 3:
-        raise ValueError("Need at least three temperature points to fit Tc, G0, and n.")
+    if len(points) < min_points:
+        raise ValueError(
+            f"Need at least {min_points} temperature points to fit this model."
+        )
     return points
 
 
