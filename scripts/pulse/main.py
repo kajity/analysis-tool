@@ -7,26 +7,51 @@ from pathlib import Path
 from typing import Sequence
 
 try:
-    from .pulse_io import format_hdf5_summary, inspect_hdf5_file
+    from .pulse_io import format_hdf5_summary, open_hdf5_pulse_data
 except ImportError:
-    from pulse_io import format_hdf5_summary, inspect_hdf5_file
+    from pulse_io import format_hdf5_summary, open_hdf5_pulse_data
+
+DEFAULT_OUTPUT_DIR = Path("outputs/pulse")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Launch an interactive pulse analysis workflow for an HDF5 file."
+        description="Run pulse analysis for an HDF5 file."
     )
     parser.add_argument("input", type=Path, help="Path to a pulse HDF5 file.")
     parser.add_argument(
-        "--non-interactive",
+        "-i",
+        "--interactive",
         action="store_true",
-        help="Validate the input and print the HDF5 summary without opening a GUI.",
+        help="Open the interactive pulse analysis GUI.",
+    )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_false",
+        dest="interactive",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help=f"Directory for generated plot images. Default: {DEFAULT_OUTPUT_DIR}",
     )
     parser.add_argument(
         "--max-items",
         type=int,
         default=40,
         help="Maximum number of HDF5 groups/datasets to include in the summary.",
+    )
+    parser.add_argument(
+        "-a",
+        "--all-traces",
+        action="store_true",
+        help=(
+            "Plot every sample in each waveform trace instead of downsampling to "
+            "the default display limit."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -35,21 +60,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
 
     try:
-        summary = inspect_hdf5_file(args.input, max_items=args.max_items)
-    except ValueError as error:
+        from .workflow import launch_pulse_workflow, save_pulse_plots
+    except ImportError:
+        from workflow import launch_pulse_workflow, save_pulse_plots
+
+    try:
+        pulse_data = open_hdf5_pulse_data(args.input, max_items=args.max_items)
+    except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
-    if args.non_interactive:
-        print(format_hdf5_summary(summary))
+    max_points_per_trace = 1000 if not args.all_traces else None
+    max_traces = None if args.all_traces else 400
+    if args.interactive:
+        launch_pulse_workflow(
+            pulse_data,
+            max_points_per_trace=max_points_per_trace,
+            max_traces=max_traces,
+        )
         return 0
 
     try:
-        from .ui import launch_pulse_ui
-    except ImportError:
-        from ui import launch_pulse_ui
+        output_paths = save_pulse_plots(
+            pulse_data,
+            args.output_dir,
+            max_points_per_trace=max_points_per_trace,
+            max_traces=max_traces,
+        )
+    except (OSError, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+    finally:
+        pulse_data.close()
 
-    launch_pulse_ui(summary, args.input.resolve())
+    print(format_hdf5_summary(pulse_data.summary))
+    print("\nSaved plot images:")
+    for output_path in output_paths:
+        print(f"- {output_path}")
     return 0
 
 
