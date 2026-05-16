@@ -6,7 +6,7 @@ from typing import Callable, Protocol
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from matplotlib.widgets import Button
+from matplotlib.widgets import Button, TextBox
 
 PlotRenderer = Callable[[Axes, str], None]
 
@@ -21,6 +21,9 @@ class PulseViewState:
     can_finish: bool
     can_reset: bool
     info_text: str
+    config_values: dict[str, str]
+    status_text: str
+    error_text: str = ""
 
 
 class PulseUiCallbacks(Protocol):
@@ -32,17 +35,24 @@ class PulseUiCallbacks(Protocol):
 
     def finish(self) -> None: ...
 
+    def apply_settings(self, updates: dict[str, str]) -> None: ...
+
 
 class PulseWizardUI:
     def __init__(self, callbacks: PulseUiCallbacks) -> None:
         self.callbacks = callbacks
         self.fig: Figure = plt.figure(figsize=(12, 7))
         self.fig.canvas.manager.set_window_title("Pulse interactive workflow")
-        self.ax_content = self.fig.add_axes((0.07, 0.22, 0.60, 0.68))
-        self.ax_info = self.fig.add_axes((0.71, 0.22, 0.23, 0.68))
+        self.ax_content = self.fig.add_axes((0.07, 0.22, 0.58, 0.68))
+        self.ax_info = self.fig.add_axes((0.69, 0.50, 0.27, 0.40))
         self.ax_steps = self.fig.add_axes((0.07, 0.08, 0.38, 0.06))
         self.ax_info.axis("off")
         self.ax_steps.axis("off")
+
+        self.control_boxes: dict[str, TextBox] = {
+            "spectrum_bins": self._make_text_box((0.80, 0.30, 0.12, 0.035), "bins"),
+        }
+        self.apply_button = self._make_button((0.80, 0.23, 0.12, 0.045), "Apply")
 
         self.back_button = self._make_button((0.50, 0.06, 0.10, 0.06), "Back")
         self.next_button = self._make_button((0.61, 0.06, 0.10, 0.06), "Next")
@@ -53,6 +63,7 @@ class PulseWizardUI:
         self.next_button.on_clicked(self.on_next)
         self.reset_button.on_clicked(self.on_reset)
         self.finish_button.on_clicked(self.on_finish)
+        self.apply_button.on_clicked(self.on_apply_settings)
 
         # Keep widget instances alive for the full lifetime of the figure.
         # self.fig._pulse_widgets = {
@@ -67,6 +78,12 @@ class PulseWizardUI:
     ) -> Button:
         ax = self.fig.add_axes(bounds)
         return Button(ax, label)
+
+    def _make_text_box(
+        self, bounds: tuple[float, float, float, float], label: str
+    ) -> TextBox:
+        ax = self.fig.add_axes(bounds)
+        return TextBox(ax, label)
 
     def _set_button_enabled(self, button: Button, enabled: bool) -> None:
         button.set_active(enabled)
@@ -86,10 +103,15 @@ class PulseWizardUI:
 
         self.ax_info.clear()
         self.ax_info.axis("off")
+        info_text = "\n\n".join(
+            text
+            for text in [state.info_text, state.status_text, state.error_text]
+            if text
+        )
         self.ax_info.text(
             0.0,
             1.0,
-            state.info_text,
+            info_text,
             transform=self.ax_info.transAxes,
             va="top",
             ha="left",
@@ -113,6 +135,9 @@ class PulseWizardUI:
         self._set_button_enabled(self.next_button, state.can_go_next)
         self._set_button_enabled(self.finish_button, state.can_finish)
         self._set_button_enabled(self.reset_button, state.can_reset)
+        for key, text_box in self.control_boxes.items():
+            if key in state.config_values:
+                text_box.set_val(state.config_values[key])
         self.fig.canvas.draw_idle()
 
     def on_back(self, _: object) -> None:
@@ -126,6 +151,11 @@ class PulseWizardUI:
 
     def on_finish(self, _: object) -> None:
         self.callbacks.finish()
+
+    def on_apply_settings(self, _: object) -> None:
+        self.callbacks.apply_settings(
+            {key: text_box.text for key, text_box in self.control_boxes.items()}
+        )
 
     def close(self) -> None:
         plt.close(self.fig)
