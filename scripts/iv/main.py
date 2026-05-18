@@ -9,6 +9,7 @@ from typing import Sequence
 try:
     from .common import resolve_input_paths
     from .context import AnalysisContext
+    from .gn_plot import run_gn_step
     from .iv_plot import run_iv_step
     from .pr_plot import run_pr_step
     from .pt_plot import run_pt_step
@@ -16,6 +17,7 @@ try:
 except ImportError:
     from common import resolve_input_paths
     from context import AnalysisContext
+    from gn_plot import run_gn_step
     from iv_plot import run_iv_step
     from pr_plot import run_pr_step
     from pt_plot import run_pt_step
@@ -23,8 +25,8 @@ except ImportError:
 
 DEFAULT_OUTPUT_DIR = Path("outputs")
 DEFAULT_CONFIG_FILE = Path("config.yaml")
-STEP_NAMES = ("all", "iv", "pr", "pt", "rt")
-CONFIG_STEPS = ("all", "pr", "pt", "rt")
+STEP_NAMES = ("all", "iv", "pr", "pt", "rt", "gn")
+CONFIG_STEPS = ("all", "pr", "pt", "rt", "gn")
 
 
 def add_common_step_arguments(parser: argparse.ArgumentParser) -> None:
@@ -103,7 +105,39 @@ def add_pt_options(parser: argparse.ArgumentParser) -> None:
         "--ratio",
         type=float,
         default=0.3,
-        help="R_TES/R_N value used to sample one P_b value per temperature. Default: 0.5.",
+        help="R_TES/R_N value used to sample one P_b value per temperature. Default: 0.3.",
+    )
+
+
+def add_gn_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--n-values",
+        type=float,
+        nargs="+",
+        default=[],
+        metavar="N",
+        help=(
+            "Explicit fixed n values to fit. "
+            "If omitted, values are generated from --n-min/--n-max/--n-count."
+        ),
+    )
+    parser.add_argument(
+        "--n-min",
+        type=float,
+        default=3.0,
+        help="Minimum fixed n value when --n-values is omitted. Default: 3.0.",
+    )
+    parser.add_argument(
+        "--n-max",
+        type=float,
+        default=4.5,
+        help="Maximum fixed n value when --n-values is omitted. Default: 4.5.",
+    )
+    parser.add_argument(
+        "--n-count",
+        type=int,
+        default=21,
+        help="Number of fixed n values when --n-values is omitted. Default: 21.",
     )
 
 
@@ -181,6 +215,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     add_iv_options(rt_parser)
     add_pt_options(rt_parser)
     rt_parser.set_defaults(handler=run_rt_step)
+
+    gn_parser = subparsers.add_parser(
+        "gn",
+        help="Plot fitted G0*Tc^(n-1) versus fixed n values.",
+        description=(
+            "For each fixed n, fit Pc ~ G0 / n * (Tc^n - T_bath^n) for Tc "
+            "and G0, then plot G0*Tc^(n-1) versus n. This step is not included "
+            "in all."
+        ),
+    )
+    add_common_step_arguments(gn_parser)
+    add_pr_options(gn_parser)
+    add_post_iv_options(gn_parser)
+    add_iv_options(gn_parser)
+    add_pt_options(gn_parser)
+    add_gn_options(gn_parser)
+    gn_parser.set_defaults(handler=run_gn_step)
 
     all_parser = subparsers.add_parser(
         "all",
