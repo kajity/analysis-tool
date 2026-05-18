@@ -51,12 +51,26 @@ STEP_INFO_TEXT = {
     "Spectrum": (
         "Spectrum\n\n"
         "Pulse heights are calculated from shaped pulses by taking the minimum "
-        "sample value in each trace, then counting those heights in histogram bins."
+        "sample value in each trace, then counting those heights in histogram bins. "
+        "The bins, min, and max controls set the histogram range."
     ),
-    "Optimal Filter Prep": (
-        "Optimal Filter Prep\n\n"
-        "Placeholder stage for future template, noise PSD, FFT, and filtered pulse "
-        "height calculations."
+    "Optimal Filter Signal FFT": (
+        "Optimal Filter Signal FFT\n\n"
+        "Magnitude of the FFT of the accepted-pulse average signal template."
+    ),
+    "Optimal Filter Noise FFT": (
+        "Optimal Filter Noise FFT\n\n"
+        "Noise FFT magnitude estimated from the background records of accepted traces."
+    ),
+    "Optimal Filter Template": (
+        "Optimal Filter Template\n\n"
+        "Time-domain inverse FFT of signal FFT divided by noise FFT squared."
+    ),
+    "Optimal Filter Pulse Height": (
+        "Optimal Filter Pulse Height\n\n"
+        "Accepted pulses are projected onto the optimal-filter template to estimate "
+        "pulse heights, then counted in histogram bins. The bins, min, and max "
+        "controls set the histogram range."
     ),
 }
 
@@ -226,7 +240,12 @@ class PulseWorkflowController:
         values = self.config.to_dict()
         return {
             "spectrum_bins": str(values["spectrum_bins"]),
+            "histogram_min": self._optional_config_text(values["histogram_min"]),
+            "histogram_max": self._optional_config_text(values["histogram_max"]),
         }
+
+    def _optional_config_text(self, value: object) -> str:
+        return "" if value is None else str(value)
 
 
 def launch_pulse_workflow(
@@ -272,6 +291,67 @@ def _save_spectrum_csv(pipeline: PulsePipeline, output_path: Path) -> Path:
     return output_path
 
 
+def _save_optimal_filter_prep_csvs(
+    pipeline: PulsePipeline,
+    output_dir: Path,
+) -> tuple[Path, Path, Path, Path, Path]:
+    prep = pipeline.optimal_filter_prep()
+    heights = pipeline.optimal_filter_pulse_height()
+    template_path = output_dir / "optimal-filter-template.csv"
+    template_fft_path = output_dir / "optimal-filter-template-fft.csv"
+    noise_path = output_dir / "optimal-filter-noise-psd.csv"
+    filter_template_path = output_dir / "optimal-filter-filter-template.csv"
+    pulse_height_path = output_dir / "optimal-filter-pulse-height.csv"
+
+    with template_path.open("w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["time", "template"])
+        for time, value in zip(prep.template_times, prep.template):
+            writer.writerow([time, value])
+
+    with template_fft_path.open("w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["frequency", "template_fft_real", "template_fft_imag"])
+        for frequency, value in zip(prep.template_frequencies, prep.template_fft):
+            writer.writerow([frequency, value.real, value.imag])
+
+    with noise_path.open("w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["frequency", "noise_fft", "noise_psd"])
+        for frequency, noise_fft, noise_psd in zip(
+            prep.noise_frequencies,
+            prep.noise_fft,
+            prep.noise_psd,
+        ):
+            writer.writerow([frequency, noise_fft, noise_psd])
+
+    with filter_template_path.open("w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["time", "filter_template"])
+        for time, value in zip(prep.filter_template_times, prep.filter_template):
+            writer.writerow([time, value])
+
+    with pulse_height_path.open("w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["bin_left", "bin_right", "count"])
+        for index, count in enumerate(heights.counts):
+            writer.writerow(
+                [
+                    heights.bin_edges[index],
+                    heights.bin_edges[index + 1],
+                    count,
+                ]
+            )
+
+    return (
+        template_path,
+        template_fft_path,
+        noise_path,
+        filter_template_path,
+        pulse_height_path,
+    )
+
+
 def _save_pipeline_outputs(
     pulse_data: Hdf5PulseData,
     pipeline: PulsePipeline,
@@ -298,6 +378,7 @@ def _save_pipeline_outputs(
             plt.close(fig)
 
     output_paths.append(_save_spectrum_csv(pipeline, run_output_dir / "spectrum.csv"))
+    output_paths.extend(_save_optimal_filter_prep_csvs(pipeline, run_output_dir))
     output_paths.append(save_config(config, run_output_dir / "config.yaml"))
     return tuple(output_paths)
 

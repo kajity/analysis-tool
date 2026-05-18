@@ -7,6 +7,7 @@ from matplotlib.axes import Axes
 try:
     from .datasource import HORIZONTAL_RESOLUTION_DATASET, VERTICAL_RESOLUTION_DATASET
     from .pipeline import (
+        OptimalFilterHeightResult,
         OptimalFilterPrepResult,
         PulsePipeline,
         PulseStage,
@@ -17,6 +18,7 @@ try:
 except ImportError:
     from datasource import HORIZONTAL_RESOLUTION_DATASET, VERTICAL_RESOLUTION_DATASET
     from pipeline import (
+        OptimalFilterHeightResult,
         OptimalFilterPrepResult,
         PulsePipeline,
         PulseStage,
@@ -47,8 +49,10 @@ class PulsePlotRenderer:
             self._draw_rejection(ax, result)
         elif isinstance(result, SpectrumResult):
             self._draw_spectrum(ax, result)
+        elif isinstance(result, OptimalFilterHeightResult):
+            self._draw_optimal_filter_height(ax, result)
         elif isinstance(result, OptimalFilterPrepResult):
-            self._draw_optimal_filter_prep(ax, result)
+            self._draw_optimal_filter(ax, stage, result)
         else:
             raise TypeError(f"Unsupported pulse plot result: {type(result).__name__}")
 
@@ -110,7 +114,7 @@ class PulsePlotRenderer:
         ax.stairs(
             result.counts,
             result.bin_edges,
-            fill=True,
+            fill=False,
             alpha=0.4,
             linewidth=1.5,
         )
@@ -126,27 +130,122 @@ class PulsePlotRenderer:
             color="0.25",
         )
 
-    def _draw_optimal_filter_prep(
+    def _draw_optimal_filter(
+        self,
+        ax: Axes,
+        stage: str,
+        result: OptimalFilterPrepResult,
+    ) -> None:
+        if stage == PulseStage.OPTIMAL_FILTER_SIGNAL_FFT.value:
+            self._draw_optimal_filter_signal_fft(ax, result)
+            return
+        if stage == PulseStage.OPTIMAL_FILTER_NOISE_FFT.value:
+            self._draw_optimal_filter_noise_fft(ax, result)
+            return
+        if stage == PulseStage.OPTIMAL_FILTER_TEMPLATE.value:
+            self._draw_optimal_filter_template(ax, result)
+            return
+        raise ValueError(f"Unknown optimal filter stage: {stage}")
+
+    def _draw_optimal_filter_signal_fft(
         self,
         ax: Axes,
         result: OptimalFilterPrepResult,
     ) -> None:
-        ax.axis("off")
+        ax.set_xlabel("Frequency")
+        ax.set_ylabel("|signal FFT|")
+        if result.template_fft.size == 0:
+            self._draw_empty_optimal_filter(ax)
+            return
+        ax.plot(result.template_frequencies, abs(result.template_fft))
+        ax.set_yscale("log")
+
+    def _draw_optimal_filter_noise_fft(
+        self,
+        ax: Axes,
+        result: OptimalFilterPrepResult,
+    ) -> None:
+        ax.set_xlabel("Frequency")
+        ax.set_ylabel("Noise FFT magnitude")
+        if result.noise_fft.size == 0:
+            self._draw_empty_optimal_filter(ax)
+            return
+        ax.plot(result.noise_frequencies, result.noise_fft)
+        ax.set_yscale("log")
+
+    def _draw_optimal_filter_template(
+        self,
+        ax: Axes,
+        result: OptimalFilterPrepResult,
+    ) -> None:
+        ax.set_xlabel(f"Sample index * {HORIZONTAL_RESOLUTION_DATASET}")
+        ax.set_ylabel("Normalized irfft(signal FFT / noise FFT^2)")
+        if result.filter_template.size == 0:
+            self._draw_empty_optimal_filter(ax)
+            return
+        ax.plot(result.filter_template_times, result.filter_template)
+
+    def _draw_optimal_filter_height(
+        self,
+        ax: Axes,
+        result: OptimalFilterHeightResult,
+    ) -> None:
+        ax.set_xlabel(
+            f"Optimized pulse height (ADC count * {VERTICAL_RESOLUTION_DATASET})"
+        )
+        ax.set_ylabel("Counts")
+        if result.counts.size == 0:
+            ax.set_ylim(bottom=0)
+            self._draw_empty_optimal_filter(ax)
+            return
+        ax.stairs(
+            result.counts,
+            result.bin_edges,
+            fill=False,
+            alpha=0.4,
+            linewidth=1.5,
+        )
+        ax.set_ylim(bottom=0)
         ax.text(
-            0.03,
-            0.95,
+            0.02,
+            0.98,
             "\n".join(
                 [
-                    "Optimal Filter Prep",
-                    "",
-                    result.status,
-                    "",
-                    f"accepted pulses: {result.accepted_count}",
+                    f"accepted={result.accepted_count}, rejected={result.rejected_count}",
+                    f"normalization={result.normalization:g}",
                 ]
             ),
             transform=ax.transAxes,
             va="top",
             ha="left",
-            fontsize=12,
+            fontsize=10,
             color="0.25",
+        )
+
+    def _draw_empty_optimal_filter(self, ax: Axes) -> None:
+        ax.text(
+            0.5,
+            0.5,
+            "No optimal filter prep data available",
+            transform=ax.transAxes,
+            va="center",
+            ha="center",
+            fontsize=12,
+            color="0.35",
+        )
+
+    def _optimal_filter_text(self, result: OptimalFilterPrepResult) -> str:
+        noise_bins = result.noise_psd.size
+        template_bins = result.template_fft.size
+        filter_template_bins = result.filter_template.size
+        return "\n".join(
+            [
+                result.status,
+                f"accepted: {result.accepted_count}",
+                f"rejected: {result.rejected_count}",
+                "noise source: background",
+                f"template FFT bins: {template_bins}",
+                f"noise PSD bins: {noise_bins}",
+                f"filter template samples: {filter_template_bins}",
+            ]
         )

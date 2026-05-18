@@ -39,6 +39,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=f"Directory for generated plot images. Default: {DEFAULT_OUTPUT_DIR}",
     )
     parser.add_argument(
+        "-c",
         "--config",
         type=Path,
         help="Path to a pulse analysis YAML config.",

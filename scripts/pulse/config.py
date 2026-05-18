@@ -15,8 +15,11 @@ class PulseAnalysisConfig:
     valid_pulse_range_stop: int = 330
     valid_pulse_diff_threshold: float = 1000.0
     spectrum_bins: str | int = "auto"
+    histogram_min: float | None = None
+    histogram_max: float | None = None
     spectrum_chunk_size: int = 512
     negative_pulses: bool = True
+    optimal_filter_template_normalize: bool = True
 
     def validated(self) -> PulseAnalysisConfig:
         if self.max_points_per_trace is not None and self.max_points_per_trace < 1:
@@ -36,6 +39,12 @@ class PulseAnalysisConfig:
             raise ValueError("spectrum_bins must be positive when it is an integer.")
         if isinstance(self.spectrum_bins, str) and self.spectrum_bins != "auto":
             raise ValueError('spectrum_bins must be "auto" or a positive integer.')
+        if (
+            self.histogram_min is not None
+            and self.histogram_max is not None
+            and self.histogram_max <= self.histogram_min
+        ):
+            raise ValueError("histogram_max must be greater than histogram_min.")
         if self.spectrum_chunk_size < 1:
             raise ValueError("spectrum_chunk_size must be positive.")
         return self
@@ -90,7 +99,11 @@ def parse_config_updates(
             parsed[key] = float(text)
         elif key == "spectrum_bins":
             parsed[key] = "auto" if text.lower() == "auto" else int(text)
+        elif key in {"histogram_min", "histogram_max"}:
+            parsed[key] = None if text.lower() in {"", "none", "null"} else float(text)
         elif key == "negative_pulses":
+            parsed[key] = text.lower() in {"1", "true", "yes", "on"}
+        elif key == "optimal_filter_template_normalize":
             parsed[key] = text.lower() in {"1", "true", "yes", "on"}
         else:
             raise ValueError(f"Unknown pulse config key: {key}")

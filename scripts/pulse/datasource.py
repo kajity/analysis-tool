@@ -74,3 +74,6 @@ class PulseDataSource:
         signal_data = wave[:, self.signal_start :]
         offset = np.average(background_data, axis=1)
         return signal_data - offset[:, np.newaxis]
+
+    def background_from_wave(self, wave: np.ndarray) -> np.ndarray:
+        return wave[:, : self.signal_start]

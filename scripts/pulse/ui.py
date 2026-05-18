@@ -51,8 +51,10 @@ class PulseWizardUI:
 
         self.control_boxes: dict[str, TextBox] = {
             "spectrum_bins": self._make_text_box((0.80, 0.30, 0.12, 0.035), "bins"),
+            "histogram_min": self._make_text_box((0.80, 0.25, 0.12, 0.035), "min"),
+            "histogram_max": self._make_text_box((0.80, 0.20, 0.12, 0.035), "max"),
         }
-        self.apply_button = self._make_button((0.80, 0.23, 0.12, 0.045), "Apply")
+        self.apply_button = self._make_button((0.80, 0.13, 0.12, 0.045), "Apply")
 
         self.back_button = self._make_button((0.50, 0.06, 0.10, 0.06), "Back")
         self.next_button = self._make_button((0.61, 0.06, 0.10, 0.06), "Next")
