@@ -11,6 +11,7 @@ from scripts.pulse.config import PulseAnalysisConfig, load_config, save_config
 from scripts.pulse.datasource import PulseDataSource
 from scripts.pulse.pipeline import PulsePipeline
 from scripts.pulse.pulse_io import open_hdf5_pulse_data
+from scripts.pulse.workflow import save_pulse_plots
 
 
 def write_test_hdf5(path: Path) -> None:
@@ -208,6 +209,65 @@ class PulsePipelineTest(unittest.TestCase):
                     pipeline.result_for_stage("Optimal Filter Pulse Height"),
                     pipeline.optimal_filter_pulse_height(),
                 )
+
+    def test_save_pulse_plots_writes_single_npy_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            output_dir = Path(tmpdir) / "outputs"
+            write_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                paths = save_pulse_plots(
+                    pulse_data,
+                    output_dir,
+                    steps=(),
+                    config=PulseAnalysisConfig(
+                        valid_pulse_range_start=1,
+                        valid_pulse_range_stop=2,
+                        valid_pulse_diff_threshold=3,
+                        spectrum_bins=3,
+                        spectrum_chunk_size=2,
+                    ),
+                )
+
+            names = {path.name for path in paths}
+            self.assertIn("pulse-results.npy", names)
+            self.assertNotIn("spectrum.npy", names)
+            self.assertNotIn("optimal-filter-template.npy", names)
+            self.assertNotIn("spectrum.csv", names)
+
+            payload = np.load(
+                output_dir / "pulse" / "pulse-results.npy",
+                allow_pickle=True,
+            ).item()
+            self.assertIn("spectrum", payload)
+            self.assertIn("optimal_filter_template", payload)
+            self.assertIn("optimal_filter_template_fft", payload)
+            self.assertEqual(int(payload["spectrum"]["count"].sum()), 3)
+
+    def test_save_pulse_plots_can_write_csv_arrays(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            output_dir = Path(tmpdir) / "outputs"
+            write_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                paths = save_pulse_plots(
+                    pulse_data,
+                    output_dir,
+                    steps=(),
+                    config=PulseAnalysisConfig(
+                        valid_pulse_range_start=1,
+                        valid_pulse_range_stop=2,
+                        valid_pulse_diff_threshold=3,
+                        spectrum_bins=3,
+                        spectrum_chunk_size=2,
+                    ),
+                    array_format="csv",
+                )
+
+            names = {path.name for path in paths}
+            self.assertIn("spectrum.csv", names)
+            self.assertIn("optimal-filter-template.csv", names)
+            self.assertNotIn("pulse-results.npy", names)
 
 
 if __name__ == "__main__":

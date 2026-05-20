@@ -115,7 +115,6 @@ class PulsePlotRenderer:
             result.counts,
             result.bin_edges,
             fill=False,
-            alpha=0.4,
             linewidth=1.5,
         )
         ax.set_ylim(bottom=0)
@@ -202,7 +201,6 @@ class PulsePlotRenderer:
             result.counts,
             result.bin_edges,
             fill=False,
-            alpha=0.4,
             linewidth=1.5,
         )
         ax.set_ylim(bottom=0)

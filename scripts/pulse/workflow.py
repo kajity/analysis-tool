@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import csv
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Literal, cast
+
+import numpy as np
 
 try:
     from .analysis import MAX_POINTS_PER_TRACE, MAX_TRACES_PER_DATASET
@@ -32,6 +36,8 @@ except ImportError:
     from ui import PulseViewState, PulseWizardUI
 
 DEFAULT_STEPS = DEFAULT_STAGES
+ArrayOutputFormat = Literal["npy", "csv"]
+SaveProgressCallback = Callable[[int, int, str, Path], None]
 STEP_INFO_TEXT = {
     "Raw View": (
         "Raw View\n\n"
@@ -144,6 +150,7 @@ class PulseWorkflowController:
         config: PulseAnalysisConfig | None = None,
         output_dir: Path | None = None,
         save_config_path: Path | None = None,
+        array_format: ArrayOutputFormat = "npy",
     ) -> None:
         self.pulse_data = pulse_data
         self.workflow = PulseWorkflow()
@@ -154,6 +161,7 @@ class PulseWorkflowController:
         )
         self.output_dir = output_dir
         self.save_config_path = save_config_path
+        self.array_format = _validated_array_format(array_format)
         self.status_message = ""
         self.source = PulseDataSource(pulse_data)
         self.pipeline = PulsePipeline(self.source, self.config)
@@ -215,6 +223,8 @@ class PulseWorkflowController:
                     self.output_dir,
                     self.config,
                     DEFAULT_STEPS,
+                    array_format=self.array_format,
+                    savefig_progress_callback=print_savefig_progress,
                 )
                 if self.save_config_path is not None:
                     output_paths = output_paths + (
@@ -255,6 +265,7 @@ def launch_pulse_workflow(
     config: PulseAnalysisConfig | None = None,
     output_dir: Path | None = None,
     save_config_path: Path | None = None,
+    array_format: ArrayOutputFormat = "npy",
 ) -> None:
     PulseWorkflowController(
         pulse_data,
@@ -263,6 +274,7 @@ def launch_pulse_workflow(
         config=config,
         output_dir=output_dir,
         save_config_path=save_config_path,
+        array_format=array_format,
     ).start()
 
 
@@ -274,76 +286,130 @@ def _run_output_dir(output_dir: Path, pulse_data: Hdf5PulseData) -> Path:
     return output_dir / pulse_data.file_path.stem
 
 
-def _save_spectrum_csv(pipeline: PulsePipeline, output_path: Path) -> Path:
-    spectrum = pipeline.spectrum()
+def print_savefig_progress(
+    current: int,
+    total: int,
+    step: str,
+    output_path: Path,
+) -> None:
+    end = "\n" if current >= total else ""
+    sys.stdout.write(
+        f"\rSaving figure {current}/{total}: {step} -> {output_path}\033[K{end}"
+    )
+    sys.stdout.flush()
+
+
+def _validated_array_format(array_format: str) -> ArrayOutputFormat:
+    if array_format not in {"npy", "csv"}:
+        raise ValueError('array_format must be "npy" or "csv".')
+    return cast(ArrayOutputFormat, array_format)
+
+
+def _save_table_csv(output_path: Path, columns: dict[str, np.ndarray]) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(["bin_left", "bin_right", "count"])
-        for index, count in enumerate(spectrum.counts):
-            writer.writerow(
-                [
-                    spectrum.bin_edges[index],
-                    spectrum.bin_edges[index + 1],
-                    count,
-                ]
-            )
+        writer.writerow(columns.keys())
+        if not columns:
+            return output_path
+        arrays = [np.asarray(column) for column in columns.values()]
+        for row in zip(*arrays):
+            writer.writerow(row)
     return output_path
 
 
-def _save_optimal_filter_prep_csvs(
+def _spectrum_columns(pipeline: PulsePipeline) -> dict[str, np.ndarray]:
+    spectrum = pipeline.spectrum()
+    return {
+        "bin_left": spectrum.bin_edges[:-1],
+        "bin_right": spectrum.bin_edges[1:],
+        "count": spectrum.counts,
+    }
+
+
+def _optimal_filter_output_columns(
     pipeline: PulsePipeline,
-    output_dir: Path,
-) -> tuple[Path, Path, Path, Path, Path]:
+) -> dict[str, dict[str, np.ndarray]]:
     prep = pipeline.optimal_filter_prep()
     heights = pipeline.optimal_filter_pulse_height()
-    template_path = output_dir / "optimal-filter-template.csv"
-    template_fft_path = output_dir / "optimal-filter-template-fft.csv"
-    noise_path = output_dir / "optimal-filter-noise-psd.csv"
-    filter_template_path = output_dir / "optimal-filter-filter-template.csv"
-    pulse_height_path = output_dir / "optimal-filter-pulse-height.csv"
+    return {
+        "optimal_filter_template": {
+            "time": prep.template_times,
+            "template": prep.template,
+        },
+        "optimal_filter_template_fft": {
+            "frequency": prep.template_frequencies,
+            "template_fft": prep.template_fft,
+        },
+        "optimal_filter_noise_psd": {
+            "frequency": prep.noise_frequencies,
+            "noise_fft": prep.noise_fft,
+            "noise_psd": prep.noise_psd,
+        },
+        "optimal_filter_filter_template": {
+            "time": prep.filter_template_times,
+            "filter_template": prep.filter_template,
+        },
+        "optimal_filter_pulse_height": {
+            "bin_left": heights.bin_edges[:-1],
+            "bin_right": heights.bin_edges[1:],
+            "count": heights.counts,
+        },
+    }
 
-    with template_path.open("w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["time", "template"])
-        for time, value in zip(prep.template_times, prep.template):
-            writer.writerow([time, value])
 
-    with template_fft_path.open("w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["frequency", "template_fft_real", "template_fft_imag"])
-        for frequency, value in zip(prep.template_frequencies, prep.template_fft):
-            writer.writerow([frequency, value.real, value.imag])
+def _save_npy_outputs(
+    pipeline: PulsePipeline,
+    output_dir: Path,
+) -> Path:
+    output_path = output_dir / "pulse-results.npy"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "spectrum": _spectrum_columns(pipeline),
+        **_optimal_filter_output_columns(pipeline),
+    }
+    np.save(output_path, payload, allow_pickle=True)
+    return output_path
 
-    with noise_path.open("w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["frequency", "noise_fft", "noise_psd"])
-        for frequency, noise_fft, noise_psd in zip(
-            prep.noise_frequencies,
-            prep.noise_fft,
-            prep.noise_psd,
-        ):
-            writer.writerow([frequency, noise_fft, noise_psd])
 
-    with filter_template_path.open("w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["time", "filter_template"])
-        for time, value in zip(prep.filter_template_times, prep.filter_template):
-            writer.writerow([time, value])
-
-    with pulse_height_path.open("w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["bin_left", "bin_right", "count"])
-        for index, count in enumerate(heights.counts):
-            writer.writerow(
-                [
-                    heights.bin_edges[index],
-                    heights.bin_edges[index + 1],
-                    count,
-                ]
-            )
+def _save_csv_outputs(
+    pipeline: PulsePipeline,
+    output_dir: Path,
+) -> tuple[Path, Path, Path, Path, Path, Path]:
+    spectrum_path = _save_table_csv(
+        output_dir / "spectrum.csv",
+        _spectrum_columns(pipeline),
+    )
+    optimal_filter_outputs = _optimal_filter_output_columns(pipeline)
+    template_path = _save_table_csv(
+        output_dir / "optimal-filter-template.csv",
+        optimal_filter_outputs["optimal_filter_template"],
+    )
+    template_fft_columns = optimal_filter_outputs["optimal_filter_template_fft"]
+    template_fft = template_fft_columns["template_fft"]
+    template_fft_path = _save_table_csv(
+        output_dir / "optimal-filter-template-fft.csv",
+        {
+            "frequency": template_fft_columns["frequency"],
+            "template_fft_real": template_fft.real,
+            "template_fft_imag": template_fft.imag,
+        },
+    )
+    noise_path = _save_table_csv(
+        output_dir / "optimal-filter-noise-psd.csv",
+        optimal_filter_outputs["optimal_filter_noise_psd"],
+    )
+    filter_template_path = _save_table_csv(
+        output_dir / "optimal-filter-filter-template.csv",
+        optimal_filter_outputs["optimal_filter_filter_template"],
+    )
+    pulse_height_path = _save_table_csv(
+        output_dir / "optimal-filter-pulse-height.csv",
+        optimal_filter_outputs["optimal_filter_pulse_height"],
+    )
 
     return (
+        spectrum_path,
         template_path,
         template_fft_path,
         noise_path,
@@ -360,25 +426,33 @@ def _save_pipeline_outputs(
     config: PulseAnalysisConfig,
     steps: tuple[str, ...] = DEFAULT_STEPS,
     dpi: int = 150,
+    array_format: ArrayOutputFormat = "npy",
+    savefig_progress_callback: SaveProgressCallback | None = None,
 ) -> tuple[Path, ...]:
     import matplotlib.pyplot as plt
 
+    array_format = _validated_array_format(array_format)
     run_output_dir = _run_output_dir(output_dir, pulse_data)
     run_output_dir.mkdir(parents=True, exist_ok=True)
     output_paths: list[Path] = []
 
-    for step in steps:
+    total_steps = len(steps)
+    for index, step in enumerate(steps, start=1):
         fig, ax = plt.subplots(figsize=(10, 6), constrained_layout=True)
         try:
             renderer.draw_plot(ax, step)
             output_path = run_output_dir / f"{_slugify_step(step)}.png"
+            if savefig_progress_callback is not None:
+                savefig_progress_callback(index, total_steps, step, output_path)
             fig.savefig(output_path, dpi=dpi)
             output_paths.append(output_path)
         finally:
             plt.close(fig)
 
-    output_paths.append(_save_spectrum_csv(pipeline, run_output_dir / "spectrum.csv"))
-    output_paths.extend(_save_optimal_filter_prep_csvs(pipeline, run_output_dir))
+    if array_format == "csv":
+        output_paths.extend(_save_csv_outputs(pipeline, run_output_dir))
+    else:
+        output_paths.append(_save_npy_outputs(pipeline, run_output_dir))
     output_paths.append(save_config(config, run_output_dir / "config.yaml"))
     return tuple(output_paths)
 
@@ -392,6 +466,8 @@ def save_pulse_plots(
     dpi: int = 150,
     config: PulseAnalysisConfig | None = None,
     save_config_path: Path | None = None,
+    array_format: ArrayOutputFormat = "npy",
+    savefig_progress_callback: SaveProgressCallback | None = None,
 ) -> tuple[Path, ...]:
     """Render pulse pipeline outputs without opening a GUI."""
     base_config = config or default_config()
@@ -410,6 +486,8 @@ def save_pulse_plots(
         effective_config,
         steps,
         dpi,
+        array_format=array_format,
+        savefig_progress_callback=savefig_progress_callback,
     )
     if save_config_path is not None:
         output_paths = output_paths + (save_config(effective_config, save_config_path),)

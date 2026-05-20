@@ -26,12 +26,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Open the interactive pulse analysis GUI.",
     )
     parser.add_argument(
-        "--non-interactive",
-        action="store_false",
-        dest="interactive",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
         "-o",
         "--output-dir",
         type=Path,
@@ -48,6 +42,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--save-config",
         type=Path,
         help="Optional path where the effective pulse analysis YAML config is saved.",
+    )
+    parser.add_argument(
+        "--array-format",
+        choices=("npy", "csv"),
+        default="npy",
+        help="Format for generated numeric array outputs. Default: npy",
     )
     parser.add_argument(
         "--max-items",
@@ -71,9 +71,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
 
     try:
-        from .workflow import launch_pulse_workflow, save_pulse_plots
+        from .workflow import (
+            launch_pulse_workflow,
+            print_savefig_progress,
+            save_pulse_plots,
+        )
     except ImportError:
-        from workflow import launch_pulse_workflow, save_pulse_plots
+        from workflow import (
+            launch_pulse_workflow,
+            print_savefig_progress,
+            save_pulse_plots,
+        )
 
     try:
         config = load_config(args.config)
@@ -97,6 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             config=config,
             output_dir=args.output_dir,
             save_config_path=args.save_config,
+            array_format=args.array_format,
         )
         return 0
 
@@ -108,6 +117,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_traces=max_traces,
             config=config,
             save_config_path=args.save_config,
+            array_format=args.array_format,
+            savefig_progress_callback=print_savefig_progress,
         )
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
@@ -116,7 +127,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pulse_data.close()
 
     print(format_hdf5_summary(pulse_data.summary))
-    print("\nSaved plot images:")
+    print("\nSaved outputs:")
     for output_path in output_paths:
         print(f"- {output_path}")
     return 0
