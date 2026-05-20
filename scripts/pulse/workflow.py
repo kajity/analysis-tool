@@ -9,7 +9,6 @@ from typing import Callable, Literal, cast
 import numpy as np
 
 try:
-    from .analysis import MAX_POINTS_PER_TRACE, MAX_TRACES_PER_DATASET
     from .config import (
         PulseAnalysisConfig,
         default_config,
@@ -22,7 +21,6 @@ try:
     from .rendering import PulsePlotRenderer
     from .ui import PulseViewState, PulseWizardUI
 except ImportError:
-    from analysis import MAX_POINTS_PER_TRACE, MAX_TRACES_PER_DATASET
     from config import (
         PulseAnalysisConfig,
         default_config,
@@ -35,6 +33,8 @@ except ImportError:
     from rendering import PulsePlotRenderer
     from ui import PulseViewState, PulseWizardUI
 
+MAX_POINTS_PER_TRACE = 1000
+MAX_TRACES_PER_DATASET = 20
 DEFAULT_STEPS = DEFAULT_STAGES
 ArrayOutputFormat = Literal["npy", "csv"]
 SaveProgressCallback = Callable[[int, int, str, Path], None]
@@ -77,6 +77,11 @@ STEP_INFO_TEXT = {
         "Accepted pulses are projected onto the optimal-filter template to estimate "
         "pulse heights, then counted in histogram bins. The bins, min, and max "
         "controls set the histogram range."
+    ),
+    "Baseline vs Optimal Filter Pulse Height": (
+        "Baseline vs Optimal Filter Pulse Height\n\n"
+        "The background-window average for each accepted trace is plotted against "
+        "that trace's optimal-filter pulse height."
     ),
 }
 
@@ -332,6 +337,7 @@ def _optimal_filter_output_columns(
 ) -> dict[str, dict[str, np.ndarray]]:
     prep = pipeline.optimal_filter_prep()
     heights = pipeline.optimal_filter_pulse_height()
+    baseline_pha = pipeline.baseline_optimal_filter_pulse_height()
     return {
         "optimal_filter_template": {
             "time": prep.template_times,
@@ -355,6 +361,10 @@ def _optimal_filter_output_columns(
             "bin_right": heights.bin_edges[1:],
             "count": heights.counts,
         },
+        "optimal_filter_baseline_pulse_height": {
+            "baseline": baseline_pha.baseline,
+            "pha": baseline_pha.pha,
+        },
     }
 
 
@@ -375,7 +385,7 @@ def _save_npy_outputs(
 def _save_csv_outputs(
     pipeline: PulsePipeline,
     output_dir: Path,
-) -> tuple[Path, Path, Path, Path, Path, Path]:
+) -> tuple[Path, Path, Path, Path, Path, Path, Path]:
     spectrum_path = _save_table_csv(
         output_dir / "spectrum.csv",
         _spectrum_columns(pipeline),
@@ -407,6 +417,10 @@ def _save_csv_outputs(
         output_dir / "optimal-filter-pulse-height.csv",
         optimal_filter_outputs["optimal_filter_pulse_height"],
     )
+    baseline_pha_path = _save_table_csv(
+        output_dir / "optimal-filter-baseline-pulse-height.csv",
+        optimal_filter_outputs["optimal_filter_baseline_pulse_height"],
+    )
 
     return (
         spectrum_path,
@@ -415,6 +429,7 @@ def _save_csv_outputs(
         noise_path,
         filter_template_path,
         pulse_height_path,
+        baseline_pha_path,
     )
 
 

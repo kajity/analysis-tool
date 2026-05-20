@@ -7,6 +7,7 @@ from matplotlib.axes import Axes
 try:
     from .datasource import HORIZONTAL_RESOLUTION_DATASET, VERTICAL_RESOLUTION_DATASET
     from .pipeline import (
+        BaselineOptimalFilterHeightResult,
         OptimalFilterHeightResult,
         OptimalFilterPrepResult,
         PulsePipeline,
@@ -18,6 +19,7 @@ try:
 except ImportError:
     from datasource import HORIZONTAL_RESOLUTION_DATASET, VERTICAL_RESOLUTION_DATASET
     from pipeline import (
+        BaselineOptimalFilterHeightResult,
         OptimalFilterHeightResult,
         OptimalFilterPrepResult,
         PulsePipeline,
@@ -51,6 +53,8 @@ class PulsePlotRenderer:
             self._draw_spectrum(ax, result)
         elif isinstance(result, OptimalFilterHeightResult):
             self._draw_optimal_filter_height(ax, result)
+        elif isinstance(result, BaselineOptimalFilterHeightResult):
+            self._draw_baseline_optimal_filter_height(ax, result)
         elif isinstance(result, OptimalFilterPrepResult):
             self._draw_optimal_filter(ax, stage, result)
         else:
@@ -72,16 +76,6 @@ class PulsePlotRenderer:
             ax,
             result.sample_times,
             result.shaped_traces * result.vertical_resolution,
-        )
-        ax.text(
-            0.02,
-            0.98,
-            f"display accepted={result.accepted_count}, rejected={result.rejected_count}",
-            transform=ax.transAxes,
-            va="top",
-            ha="left",
-            fontsize=10,
-            color="0.25",
         )
 
     def _draw_trace_collection(
@@ -118,16 +112,6 @@ class PulsePlotRenderer:
             linewidth=1.5,
         )
         ax.set_ylim(bottom=0)
-        ax.text(
-            0.02,
-            0.98,
-            f"accepted={result.accepted_count}, rejected={result.rejected_count}",
-            transform=ax.transAxes,
-            va="top",
-            ha="left",
-            fontsize=10,
-            color="0.25",
-        )
 
     def _draw_optimal_filter(
         self,
@@ -204,20 +188,25 @@ class PulsePlotRenderer:
             linewidth=1.5,
         )
         ax.set_ylim(bottom=0)
-        ax.text(
-            0.02,
-            0.98,
-            "\n".join(
-                [
-                    f"accepted={result.accepted_count}, rejected={result.rejected_count}",
-                    f"normalization={result.normalization:g}",
-                ]
-            ),
-            transform=ax.transAxes,
-            va="top",
-            ha="left",
-            fontsize=10,
-            color="0.25",
+
+    def _draw_baseline_optimal_filter_height(
+        self,
+        ax: Axes,
+        result: BaselineOptimalFilterHeightResult,
+    ) -> None:
+        ax.set_xlabel(f"Baseline average (ADC count * {VERTICAL_RESOLUTION_DATASET})")
+        ax.set_ylabel(
+            f"Optimized pulse height (ADC count * {VERTICAL_RESOLUTION_DATASET})"
+        )
+        if result.pha.size == 0:
+            self._draw_empty_optimal_filter(ax)
+            return
+        ax.scatter(
+            result.baseline,
+            result.pha,
+            s=6,
+            alpha=0.35,
+            linewidths=0,
         )
 
     def _draw_empty_optimal_filter(self, ax: Axes) -> None:
@@ -230,20 +219,4 @@ class PulsePlotRenderer:
             ha="center",
             fontsize=12,
             color="0.35",
-        )
-
-    def _optimal_filter_text(self, result: OptimalFilterPrepResult) -> str:
-        noise_bins = result.noise_psd.size
-        template_bins = result.template_fft.size
-        filter_template_bins = result.filter_template.size
-        return "\n".join(
-            [
-                result.status,
-                f"accepted: {result.accepted_count}",
-                f"rejected: {result.rejected_count}",
-                "noise source: background",
-                f"template FFT bins: {template_bins}",
-                f"noise PSD bins: {noise_bins}",
-                f"filter template samples: {filter_template_bins}",
-            ]
         )

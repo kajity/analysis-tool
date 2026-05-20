@@ -7,9 +7,11 @@ from typing import Any
 import numpy as np
 
 try:
+    from . import analysis as pulse_analysis
     from .config import PulseAnalysisConfig
     from .datasource import PulseDataSource
 except ImportError:
+    import analysis as pulse_analysis
     from config import PulseAnalysisConfig
     from datasource import PulseDataSource
 
@@ -23,6 +25,7 @@ class PulseStage(StrEnum):
     OPTIMAL_FILTER_NOISE_FFT = "Optimal Filter Noise FFT"
     OPTIMAL_FILTER_TEMPLATE = "Optimal Filter Template"
     OPTIMAL_FILTER_PULSE_HEIGHT = "Optimal Filter Pulse Height"
+    BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT = "Baseline vs Optimal Filter Pulse Height"
 
 
 DEFAULT_STAGES = tuple(stage.value for stage in PulseStage)
@@ -74,9 +77,22 @@ class OptimalFilterPrepResult:
 
 @dataclass(frozen=True)
 class OptimalFilterHeightResult:
-    pulse_heights: np.ndarray
+    pha: np.ndarray
     counts: np.ndarray
     bin_edges: np.ndarray
+    accepted_count: int
+    rejected_count: int
+    normalization: float
+
+    @property
+    def pulse_heights(self) -> np.ndarray:
+        return self.pha
+
+
+@dataclass(frozen=True)
+class BaselineOptimalFilterHeightResult:
+    baseline: np.ndarray
+    pha: np.ndarray
     accepted_count: int
     rejected_count: int
     normalization: float
@@ -130,6 +146,7 @@ class PulsePipeline:
             self._cache.pop(PulseStage.OPTIMAL_FILTER_NOISE_FFT.value, None)
             self._cache.pop(PulseStage.OPTIMAL_FILTER_TEMPLATE.value, None)
             self._cache.pop(PulseStage.OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
+            self._cache.pop(PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
         if changed & spectrum_keys:
             self._cache.pop(PulseStage.SPECTRUM.value, None)
             self._cache.pop(PulseStage.OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
@@ -139,6 +156,7 @@ class PulsePipeline:
             self._cache.pop(PulseStage.OPTIMAL_FILTER_NOISE_FFT.value, None)
             self._cache.pop(PulseStage.OPTIMAL_FILTER_TEMPLATE.value, None)
             self._cache.pop(PulseStage.OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
+            self._cache.pop(PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
 
     def result_for_stage(self, stage: str) -> Any:
         if stage == PulseStage.RAW_VIEW.value:
@@ -157,6 +175,8 @@ class PulsePipeline:
             return self.optimal_filter_prep()
         if stage == PulseStage.OPTIMAL_FILTER_PULSE_HEIGHT.value:
             return self.optimal_filter_pulse_height()
+        if stage == PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value:
+            return self.baseline_optimal_filter_pulse_height()
         raise ValueError(f"Unknown pulse stage: {stage}")
 
     def raw_view(self) -> TracePlotResult:
@@ -174,55 +194,93 @@ class PulsePipeline:
     def optimal_filter_pulse_height(self) -> OptimalFilterHeightResult:
         key = PulseStage.OPTIMAL_FILTER_PULSE_HEIGHT.value
         if key not in self._cache:
+            baseline_pha = self.baseline_optimal_filter_pulse_height()
+            if baseline_pha.pha.size:
+                counts, bin_edges = np.histogram(
+                    baseline_pha.pha,
+                    bins=self.config.spectrum_bins,
+                    range=pulse_analysis.histogram_range(
+                        baseline_pha.pha,
+                        self.config.histogram_min,
+                        self.config.histogram_max,
+                    ),
+                )
+            else:
+                counts = np.array([], dtype=int)
+                bin_edges = np.array([], dtype=float)
+
+            self._cache[key] = OptimalFilterHeightResult(
+                pha=baseline_pha.pha,
+                counts=counts,
+                bin_edges=bin_edges,
+                accepted_count=baseline_pha.accepted_count,
+                rejected_count=baseline_pha.rejected_count,
+                normalization=baseline_pha.normalization,
+            )
+        return self._cache[key]
+
+    def baseline_optimal_filter_pulse_height(
+        self,
+    ) -> BaselineOptimalFilterHeightResult:
+        key = PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value
+        if key not in self._cache:
             prep = self.optimal_filter_prep()
-            pulse_height_chunks: list[np.ndarray] = []
+            baseline_chunks: list[np.ndarray] = []
+            pha_chunks: list[np.ndarray] = []
             accepted_count = 0
             rejected_count = 0
-            normalization = self._filter_height_normalization(prep)
+            normalization = pulse_analysis.filter_height_normalization(
+                prep.template,
+                prep.filter_template,
+            )
 
             if prep.filter_template.size and normalization != 0:
                 for wave_chunk in self.source.iter_wave_chunks(
                     self.config.spectrum_chunk_size
                 ):
                     aligned_signal = self.source.aligned_signal_from_wave(wave_chunk)
-                    mask = self._valid_pulse_mask(
-                        self._differential_signal(aligned_signal)
+                    mask = pulse_analysis.valid_pulse_mask(
+                        pulse_analysis.differential_signal(aligned_signal),
+                        self.config.valid_pulse_range_start,
+                        self.config.valid_pulse_range_stop,
+                        self.config.valid_pulse_diff_threshold,
                     )
                     accepted = aligned_signal[mask]
                     accepted_count += int(np.count_nonzero(mask))
                     rejected_count += int(mask.size - np.count_nonzero(mask))
                     if accepted.size == 0:
                         continue
+
+                    background = self.source.background_from_wave(wave_chunk)
+                    baseline = (
+                        np.average(background, axis=1)[mask]
+                        * self.source.vertical_resolution
+                    )
                     template_source = (
                         -accepted if self.config.negative_pulses else accepted
                     )
-                    pulse_heights = (
+                    pha = (
                         template_source
                         @ prep.filter_template
                         / normalization
                         * self.source.vertical_resolution
                     )
-                    pulse_height_chunks.append(pulse_heights)
+                    baseline_chunks.append(baseline)
+                    pha_chunks.append(pha)
             else:
                 accepted_count = prep.accepted_count
                 rejected_count = prep.rejected_count
 
-            if pulse_height_chunks:
-                pulse_heights = np.concatenate(pulse_height_chunks)
-                counts, bin_edges = np.histogram(
-                    pulse_heights,
-                    bins=self.config.spectrum_bins,
-                    range=self._histogram_range(pulse_heights),
-                )
+            if pha_chunks:
+                baseline = np.concatenate(baseline_chunks)
+                pha = np.concatenate(pha_chunks)
             else:
-                pulse_heights = np.array([], dtype=float)
-                counts = np.array([], dtype=int)
-                bin_edges = np.array([], dtype=float)
+                baseline = np.array([], dtype=float)
+                pha = np.array([], dtype=float)
 
-            self._cache[key] = OptimalFilterHeightResult(
-                pulse_heights=pulse_heights,
-                counts=counts,
-                bin_edges=bin_edges,
+            self._cache[key] = BaselineOptimalFilterHeightResult(
+                baseline=baseline,
+                pha=pha,
                 accepted_count=accepted_count,
                 rejected_count=rejected_count,
                 normalization=float(normalization),
@@ -239,7 +297,12 @@ class PulsePipeline:
         key = PulseStage.REJECT_SHAPING.value
         if key not in self._cache:
             aligned_signal = self._display_aligned_signal()
-            mask = self._valid_pulse_mask(self._differential_signal(aligned_signal))
+            mask = pulse_analysis.valid_pulse_mask(
+                pulse_analysis.differential_signal(aligned_signal),
+                self.config.valid_pulse_range_start,
+                self.config.valid_pulse_range_stop,
+                self.config.valid_pulse_diff_threshold,
+            )
             sample_times, shaped_traces = self._sample_traces(aligned_signal[mask])
             self._cache[key] = RejectionResult(
                 sample_times=sample_times,
@@ -260,10 +323,19 @@ class PulsePipeline:
                 self.config.spectrum_chunk_size
             ):
                 aligned_signal = self.source.aligned_signal_from_wave(wave_chunk)
-                mask = self._valid_pulse_mask(self._differential_signal(aligned_signal))
+                mask = pulse_analysis.valid_pulse_mask(
+                    pulse_analysis.differential_signal(aligned_signal),
+                    self.config.valid_pulse_range_start,
+                    self.config.valid_pulse_range_stop,
+                    self.config.valid_pulse_diff_threshold,
+                )
                 accepted_count += int(np.count_nonzero(mask))
                 rejected_count += int(mask.size - np.count_nonzero(mask))
-                pulse_heights = self._pulse_heights(aligned_signal[mask])
+                pulse_heights = pulse_analysis.pulse_heights(
+                    aligned_signal[mask],
+                    self.source.vertical_resolution,
+                    self.config.negative_pulses,
+                )
                 if pulse_heights.size:
                     pulse_height_chunks.append(pulse_heights)
 
@@ -272,7 +344,11 @@ class PulsePipeline:
                 counts, bin_edges = np.histogram(
                     pulse_heights,
                     bins=self.config.spectrum_bins,
-                    range=self._histogram_range(pulse_heights),
+                    range=pulse_analysis.histogram_range(
+                        pulse_heights,
+                        self.config.histogram_min,
+                        self.config.histogram_max,
+                    ),
                 )
             else:
                 pulse_heights = np.array([], dtype=float)
@@ -300,7 +376,12 @@ class PulsePipeline:
                 self.config.spectrum_chunk_size
             ):
                 aligned_signal = self.source.aligned_signal_from_wave(wave_chunk)
-                mask = self._valid_pulse_mask(self._differential_signal(aligned_signal))
+                mask = pulse_analysis.valid_pulse_mask(
+                    pulse_analysis.differential_signal(aligned_signal),
+                    self.config.valid_pulse_range_start,
+                    self.config.valid_pulse_range_stop,
+                    self.config.valid_pulse_diff_threshold,
+                )
                 accepted = aligned_signal[mask]
                 background = self.source.background_from_wave(wave_chunk)[mask]
                 accepted_count += int(np.count_nonzero(mask))
@@ -315,7 +396,7 @@ class PulsePipeline:
                 else:
                     template_sum += chunk_template_sum
 
-                noise_records = self._noise_records(background)
+                noise_records = pulse_analysis.noise_records(background)
                 if noise_records.size == 0:
                     continue
                 noise_fft = np.fft.rfft(noise_records, axis=1)
@@ -364,7 +445,7 @@ class PulsePipeline:
                         self.source.signal_start,
                         d=self.source.horizontal_resolution,
                     )
-                    filter_template_fft = self._filter_template_fft(
+                    filter_template_fft = pulse_analysis.filter_template_fft(
                         template_fft,
                         noise_psd,
                     )
@@ -451,9 +532,6 @@ class PulsePipeline:
             self._cache["display_aligned"] = self.source.aligned_signal_from_wave(wave)
         return self._cache["display_aligned"]
 
-    def _differential_signal(self, aligned_signal: np.ndarray) -> np.ndarray:
-        return np.diff(aligned_signal, axis=1)
-
     def _sample_traces(self, traces: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         sample_indices = self.source.sample_indices(
             traces.shape[1],
@@ -461,82 +539,6 @@ class PulsePipeline:
         )
         sample_times = sample_indices * self.source.horizontal_resolution
         return sample_times, traces[:, sample_indices]
-
-    def _valid_pulse_mask(self, differential_signal: np.ndarray) -> np.ndarray:
-        start = self.config.valid_pulse_range_start
-        stop = self.config.valid_pulse_range_stop
-        diff_count = differential_signal.shape[1]
-        outside_valid_range = np.ones(diff_count, dtype=bool)
-        outside_valid_range[min(start, diff_count) : min(stop, diff_count)] = False
-        if not np.any(outside_valid_range):
-            return np.ones(differential_signal.shape[0], dtype=bool)
-
-        outside_diff = np.abs(differential_signal[:, outside_valid_range])
-        return np.all(
-            outside_diff <= self.config.valid_pulse_diff_threshold,
-            axis=1,
-        )
-
-    def _pulse_heights(self, shaped_signal: np.ndarray) -> np.ndarray:
-        if shaped_signal.size == 0:
-            return np.array([], dtype=float)
-        heights = np.min(shaped_signal, axis=1) * self.source.vertical_resolution
-        if self.config.negative_pulses:
-            heights *= -1
-        return heights
-
-    def _noise_records(self, background_signal: np.ndarray) -> np.ndarray:
-        if background_signal.size == 0:
-            return np.array([], dtype=float)
-        return background_signal - np.average(background_signal, axis=1, keepdims=True)
-
-    def _filter_template_fft(
-        self,
-        template_fft: np.ndarray,
-        noise_psd: np.ndarray,
-    ) -> np.ndarray:
-        usable_bins = min(template_fft.size, noise_psd.size)
-        if usable_bins == 0:
-            return np.array([], dtype=complex)
-
-        result = np.zeros_like(template_fft)
-        noise_power = noise_psd[:usable_bins]
-        positive = noise_power > 0
-        # Noise records are mean-subtracted, so the DC bin has no useful variance
-        # estimate and would otherwise dominate signal/noise^2.
-        positive[0] = False
-        usable_result = result[:usable_bins]
-        usable_result[positive] = (
-            template_fft[:usable_bins][positive] / noise_power[positive]
-        )
-        return result
-
-    def _filter_height_normalization(self, prep: OptimalFilterPrepResult) -> float:
-        if prep.template.size == 0 or prep.filter_template.size == 0:
-            return 0.0
-        usable_samples = min(prep.template.size, prep.filter_template.size)
-        return float(
-            prep.template[:usable_samples] @ prep.filter_template[:usable_samples]
-        )
-
-    def _histogram_range(self, values: np.ndarray) -> tuple[float, float] | None:
-        if self.config.histogram_min is None and self.config.histogram_max is None:
-            return None
-        if values.size == 0:
-            return None
-        lower = (
-            float(np.min(values))
-            if self.config.histogram_min is None
-            else self.config.histogram_min
-        )
-        upper = (
-            float(np.max(values))
-            if self.config.histogram_max is None
-            else self.config.histogram_max
-        )
-        if upper <= lower:
-            raise ValueError("histogram range must have max greater than min.")
-        return lower, upper
 
     def _configured_histogram_range(self) -> tuple[float | None, float | None] | None:
         if self.config.histogram_min is None or self.config.histogram_max is None:
