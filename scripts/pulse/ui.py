@@ -60,15 +60,27 @@ class PulseWizardUI:
         self.ax_info.axis("off")
 
         self.control_boxes: dict[str, TextBox] = {
-            "spectrum_bins": self._make_text_box((0.81, 0.325, 0.10, 0.030), "bins"),
-            "histogram_min": self._make_text_box((0.81, 0.282, 0.10, 0.030), "min"),
-            "histogram_max": self._make_text_box((0.81, 0.239, 0.10, 0.030), "max"),
-            "baseline_drift_correction": self._make_text_box(
-                (0.81, 0.196, 0.10, 0.030),
-                "drift",
+            "spectrum_bins": self._make_text_box((0.81, 0.310, 0.10, 0.030), "bins"),
+            "histogram_min": self._make_text_box((0.81, 0.265, 0.10, 0.030), "min"),
+            "histogram_max": self._make_text_box((0.81, 0.220, 0.10, 0.030), "max"),
+            "baseline_drift_baseline_min": self._make_text_box(
+                (0.81, 0.177, 0.10, 0.030),
+                "b min",
+            ),
+            "baseline_drift_baseline_max": self._make_text_box(
+                (0.81, 0.134, 0.10, 0.030),
+                "b max",
+            ),
+            "baseline_drift_pha_min": self._make_text_box(
+                (0.81, 0.091, 0.10, 0.030),
+                "p min",
+            ),
+            "baseline_drift_pha_max": self._make_text_box(
+                (0.81, 0.048, 0.10, 0.030),
+                "p max",
             ),
         }
-        self.apply_button = self._make_button((0.81, 0.145, 0.10, 0.038), "Apply")
+        self.apply_button = self._make_button((0.81, 0.170, 0.10, 0.038), "Apply")
 
         self.next_button = self._make_button((0.07, 0.105, 0.075, 0.040), "Next")
         self.back_button = self._make_button((0.07, 0.055, 0.075, 0.040), "Prev")
@@ -183,8 +195,18 @@ class PulseWizardUI:
                 enabled=not selected and not state.finished,
                 selected=selected,
             )
+        drift_controls_visible = any(
+            key.startswith("baseline_drift_") for key in state.config_values
+        )
+        if drift_controls_visible:
+            self.apply_button.ax.set_position((0.92, 0.048, 0.055, 0.038))
+        else:
+            self.apply_button.ax.set_position((0.81, 0.170, 0.10, 0.038))
         for key, text_box in self.control_boxes.items():
-            if key in state.config_values:
+            visible = key in state.config_values
+            text_box.ax.set_visible(visible)
+            text_box.set_active(visible)
+            if visible:
                 text_box.set_val(state.config_values[key])
         self.fig.canvas.draw_idle()
 
@@ -199,7 +221,11 @@ class PulseWizardUI:
 
     def on_apply_settings(self, _: object) -> None:
         self.callbacks.apply_settings(
-            {key: text_box.text for key, text_box in self.control_boxes.items()}
+            {
+                key: text_box.text
+                for key, text_box in self.control_boxes.items()
+                if text_box.ax.get_visible()
+            }
         )
 
     def close(self) -> None:

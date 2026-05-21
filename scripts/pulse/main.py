@@ -49,6 +49,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="npy",
         help="Format for generated numeric array outputs. Default: npy",
     )
+    drift_group = parser.add_mutually_exclusive_group()
+    drift_group.add_argument(
+        "-d",
+        "--drift-correction",
+        dest="baseline_drift_correction",
+        action="store_true",
+        default=None,
+        help="Enable baseline/PHA drift correction and show drift controls.",
+    )
+    drift_group.add_argument(
+        "--no-drift-correction",
+        dest="baseline_drift_correction",
+        action="store_false",
+        help="Disable baseline/PHA drift correction and use the original UI steps.",
+    )
     parser.add_argument(
         "--max-items",
         type=int,
@@ -85,6 +100,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         config = load_config(args.config)
+        if args.baseline_drift_correction is not None:
+            config = config.with_updates(
+                baseline_drift_correction=args.baseline_drift_correction
+            )
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1

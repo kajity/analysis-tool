@@ -30,7 +30,14 @@ class PulseStage(StrEnum):
     )
 
 
-DEFAULT_STAGES = tuple(stage.value for stage in PulseStage)
+DEFAULT_STAGES = tuple(
+    stage.value
+    for stage in PulseStage
+    if stage is not PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT
+)
+DRIFT_CORRECTION_STAGES = DEFAULT_STAGES + (
+    PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value,
+)
 OPTIMAL_FILTER_PREP_CACHE_KEY = "Optimal Filter Prep"
 
 
@@ -92,17 +99,23 @@ class OptimalFilterHeightResult:
 
 
 @dataclass(frozen=True)
+class DriftCorrectionResult:
+    pha_corrected: np.ndarray
+    slope: float
+    intercept: float
+    reference_baseline: float
+    fit_count: int
+    fit_mask: np.ndarray
+
+
+@dataclass(frozen=True)
 class BaselineOptimalFilterHeightResult:
     baseline: np.ndarray
     pha: np.ndarray
-    pha_corrected: np.ndarray
-    drift_slope: float
-    drift_intercept: float
-    drift_reference_baseline: float
-    drift_correction_enabled: bool
     accepted_count: int
     rejected_count: int
     normalization: float
+    drift: DriftCorrectionResult | None = None
 
 
 class PulsePipeline:
@@ -134,7 +147,13 @@ class PulsePipeline:
             "spectrum_chunk_size",
             "optimal_filter_template_normalize",
         }
-        drift_correction_keys = {"baseline_drift_correction"}
+        drift_correction_keys = {
+            "baseline_drift_correction",
+            "baseline_drift_baseline_min",
+            "baseline_drift_baseline_max",
+            "baseline_drift_pha_min",
+            "baseline_drift_pha_max",
+        }
         changed = {
             key
             for key, value in self.config.to_dict().items()
@@ -248,7 +267,11 @@ class PulsePipeline:
         key = PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value
         if key not in self._cache:
             baseline_pha = self.baseline_optimal_filter_pulse_height()
-            pha = baseline_pha.pha_corrected
+            pha = (
+                baseline_pha.drift.pha_corrected
+                if baseline_pha.drift is not None
+                else baseline_pha.pha
+            )
             if pha.size:
                 counts, bin_edges = np.histogram(
                     pha,
@@ -332,22 +355,39 @@ class PulsePipeline:
                 baseline = np.array([], dtype=float)
                 pha = np.array([], dtype=float)
 
-            drift = pulse_analysis.baseline_drift_corrected_pulse_heights(
-                baseline,
-                pha,
-                self.config.baseline_drift_correction,
-            )
+            drift = None
+            if self.config.baseline_drift_correction:
+                (
+                    pha_corrected,
+                    drift_slope,
+                    drift_intercept,
+                    drift_reference_baseline,
+                    drift_fit_count,
+                    drift_fit_mask,
+                ) = pulse_analysis.baseline_drift_corrected_pulse_heights(
+                    baseline,
+                    pha,
+                    enabled=True,
+                    baseline_min=self.config.baseline_drift_baseline_min,
+                    baseline_max=self.config.baseline_drift_baseline_max,
+                    pha_min=self.config.baseline_drift_pha_min,
+                    pha_max=self.config.baseline_drift_pha_max,
+                )
+                drift = DriftCorrectionResult(
+                    pha_corrected=pha_corrected,
+                    slope=drift_slope,
+                    intercept=drift_intercept,
+                    reference_baseline=drift_reference_baseline,
+                    fit_count=drift_fit_count,
+                    fit_mask=drift_fit_mask,
+                )
             self._cache[key] = BaselineOptimalFilterHeightResult(
                 baseline=baseline,
                 pha=pha,
-                pha_corrected=drift.pha_corrected,
-                drift_slope=drift.slope,
-                drift_intercept=drift.intercept,
-                drift_reference_baseline=drift.reference_baseline,
-                drift_correction_enabled=self.config.baseline_drift_correction,
                 accepted_count=accepted_count,
                 rejected_count=rejected_count,
                 normalization=float(normalization),
+                drift=drift,
             )
         return self._cache[key]
 
@@ -557,8 +597,15 @@ class PulsePipeline:
             f"PH bins: {config.spectrum_bins}",
             f"histogram range: {self._histogram_range_text()}",
             f"chunk size: {config.spectrum_chunk_size}",
-            f"baseline drift correction: {config.baseline_drift_correction}",
         ]
+        if config.baseline_drift_correction:
+            lines.extend(
+                [
+                    "baseline drift correction: True",
+                    f"drift baseline range: {self._range_text(config.baseline_drift_baseline_min, config.baseline_drift_baseline_max)}",
+                    f"drift PHA range: {self._range_text(config.baseline_drift_pha_min, config.baseline_drift_pha_max)}",
+                ]
+            )
         if stage in {
             PulseStage.OPTIMAL_FILTER_SIGNAL_FFT.value,
             PulseStage.OPTIMAL_FILTER_NOISE_FFT.value,
@@ -581,12 +628,13 @@ class PulsePipeline:
                     f"rejected: {cached.rejected_count}",
                 ]
             )
-            if isinstance(cached, BaselineOptimalFilterHeightResult):
+            if isinstance(cached, BaselineOptimalFilterHeightResult) and cached.drift:
                 lines.extend(
                     [
-                        f"drift correction: {cached.drift_correction_enabled}",
-                        f"drift slope: {cached.drift_slope:g}",
-                        f"drift reference baseline: {cached.drift_reference_baseline:g}",
+                        "drift correction: True",
+                        f"drift slope: {cached.drift.slope:g}",
+                        f"drift reference baseline: {cached.drift.reference_baseline:g}",
+                        f"drift fit points: {cached.drift.fit_count}",
                     ]
                 )
         return "\n".join(lines)
@@ -614,6 +662,11 @@ class PulsePipeline:
                 return None
             return self.config.histogram_min, self.config.histogram_max
         return self.config.histogram_min, self.config.histogram_max
+
+    def _range_text(self, lower: float | None, upper: float | None) -> str:
+        lower_text = "auto" if lower is None else f"{lower:g}"
+        upper_text = "auto" if upper is None else f"{upper:g}"
+        return f"{lower_text}:{upper_text}"
 
     def _histogram_range_text(self) -> str:
         histogram_range = self._configured_histogram_range()

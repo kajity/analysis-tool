@@ -16,7 +16,7 @@ try:
         save_config,
     )
     from .datasource import PulseDataSource
-    from .pipeline import DEFAULT_STAGES, PulsePipeline
+    from .pipeline import DEFAULT_STAGES, DRIFT_CORRECTION_STAGES, PulsePipeline
     from .pulse_io import Hdf5PulseData, format_hdf5_summary
     from .rendering import PulsePlotRenderer
     from .ui import PulseViewState, PulseWizardUI
@@ -28,7 +28,7 @@ except ImportError:
         save_config,
     )
     from datasource import PulseDataSource
-    from pipeline import DEFAULT_STAGES, PulsePipeline
+    from pipeline import DEFAULT_STAGES, DRIFT_CORRECTION_STAGES, PulsePipeline
     from pulse_io import Hdf5PulseData, format_hdf5_summary
     from rendering import PulsePlotRenderer
     from ui import PulseViewState, PulseWizardUI
@@ -85,6 +85,12 @@ STEP_INFO_TEXT = {
         "linear dependence on baseline around the mean baseline."
     ),
 }
+
+
+def pulse_steps(config: PulseAnalysisConfig) -> tuple[str, ...]:
+    if config.baseline_drift_correction:
+        return DRIFT_CORRECTION_STAGES
+    return DEFAULT_STEPS
 
 
 @dataclass
@@ -157,19 +163,23 @@ class PulseWorkflowController:
         array_format: ArrayOutputFormat = "npy",
     ) -> None:
         self.pulse_data = pulse_data
-        self.workflow = PulseWorkflow()
         base_config = config or default_config()
         self.config = base_config.with_updates(
             max_points_per_trace=max_points_per_trace,
             max_display_traces=max_traces,
         )
+        self.workflow = PulseWorkflow(steps=pulse_steps(self.config))
         self.output_dir = output_dir
         self.save_config_path = save_config_path
         self.array_format = _validated_array_format(array_format)
         self.status_message = ""
         self.source = PulseDataSource(pulse_data)
         self.pipeline = PulsePipeline(self.source, self.config)
-        self.renderer = PulsePlotRenderer(self.pipeline, pulse_data.file_path)
+        self.renderer = PulsePlotRenderer(
+            self.pipeline,
+            pulse_data.file_path,
+            baseline_drift_range_callback=self.apply_baseline_drift_range,
+        )
         self.ui = PulseWizardUI(callbacks=self)
 
     def start(self) -> None:
@@ -226,7 +236,7 @@ class PulseWorkflowController:
                     self.renderer,
                     self.output_dir,
                     self.config,
-                    DEFAULT_STEPS,
+                    self.workflow.steps,
                     array_format=self.array_format,
                     savefig_progress_callback=print_savefig_progress,
                 )
@@ -239,6 +249,28 @@ class PulseWorkflowController:
                     print(f"- {output_path}")
             self.ui.close()
 
+    def apply_baseline_drift_range(
+        self,
+        baseline_min: float,
+        baseline_max: float,
+        pha_min: float,
+        pha_max: float,
+    ) -> None:
+        try:
+            self.config = self.config.with_updates(
+                baseline_drift_baseline_min=baseline_min,
+                baseline_drift_baseline_max=baseline_max,
+                baseline_drift_pha_min=pha_min,
+                baseline_drift_pha_max=pha_max,
+            )
+        except ValueError as error:
+            self.status_message = f"Error: {error}"
+            self.render()
+            return
+        self.status_message = "Drift fit range selected."
+        self.pipeline.update_config(self.config)
+        self.render()
+
     def apply_settings(self, updates: dict[str, str]) -> None:
         try:
             self.config = parse_config_updates(self.config, updates)
@@ -247,19 +279,38 @@ class PulseWorkflowController:
             self.render()
             return
         self.status_message = "Settings applied."
+        self.workflow = PulseWorkflow(
+            steps=pulse_steps(self.config),
+            step_index=min(self.workflow.step_index, len(pulse_steps(self.config)) - 1),
+        )
         self.pipeline.update_config(self.config)
         self.render()
 
     def config_values(self) -> dict[str, str]:
         values = self.config.to_dict()
-        return {
+        config_values = {
             "spectrum_bins": str(values["spectrum_bins"]),
             "histogram_min": self._optional_config_text(values["histogram_min"]),
             "histogram_max": self._optional_config_text(values["histogram_max"]),
-            "baseline_drift_correction": str(
-                values["baseline_drift_correction"]
-            ).lower(),
         }
+        if self.config.baseline_drift_correction:
+            config_values.update(
+                {
+                    "baseline_drift_baseline_min": self._optional_config_text(
+                        values["baseline_drift_baseline_min"]
+                    ),
+                    "baseline_drift_baseline_max": self._optional_config_text(
+                        values["baseline_drift_baseline_max"]
+                    ),
+                    "baseline_drift_pha_min": self._optional_config_text(
+                        values["baseline_drift_pha_min"]
+                    ),
+                    "baseline_drift_pha_max": self._optional_config_text(
+                        values["baseline_drift_pha_max"]
+                    ),
+                }
+            )
+        return config_values
 
     def _optional_config_text(self, value: object) -> str:
         return "" if value is None else str(value)
@@ -340,8 +391,7 @@ def _optimal_filter_output_columns(
     prep = pipeline.optimal_filter_prep()
     heights = pipeline.optimal_filter_pulse_height()
     baseline_pha = pipeline.baseline_optimal_filter_pulse_height()
-    drift_corrected = pipeline.drift_corrected_optimal_filter_pulse_height()
-    return {
+    outputs = {
         "optimal_filter_template": {
             "time": prep.template_times,
             "template": prep.template,
@@ -367,20 +417,26 @@ def _optimal_filter_output_columns(
         "optimal_filter_baseline_pulse_height": {
             "baseline": baseline_pha.baseline,
             "pha": baseline_pha.pha,
-            "pha_corrected": baseline_pha.pha_corrected,
         },
-        "optimal_filter_drift_correction": {
-            "enabled": np.array([baseline_pha.drift_correction_enabled]),
-            "slope": np.array([baseline_pha.drift_slope]),
-            "intercept": np.array([baseline_pha.drift_intercept]),
-            "reference_baseline": np.array([baseline_pha.drift_reference_baseline]),
-        },
-        "optimal_filter_drift_corrected_pulse_height": {
+    }
+    if baseline_pha.drift is not None:
+        drift_corrected = pipeline.drift_corrected_optimal_filter_pulse_height()
+        outputs["optimal_filter_baseline_pulse_height"][
+            "pha_corrected"
+        ] = baseline_pha.drift.pha_corrected
+        outputs["optimal_filter_drift_correction"] = {
+            "enabled": np.array([True]),
+            "slope": np.array([baseline_pha.drift.slope]),
+            "intercept": np.array([baseline_pha.drift.intercept]),
+            "reference_baseline": np.array([baseline_pha.drift.reference_baseline]),
+            "fit_count": np.array([baseline_pha.drift.fit_count]),
+        }
+        outputs["optimal_filter_drift_corrected_pulse_height"] = {
             "bin_left": drift_corrected.bin_edges[:-1],
             "bin_right": drift_corrected.bin_edges[1:],
             "count": drift_corrected.counts,
-        },
-    }
+        }
+    return outputs
 
 
 def _save_npy_outputs(
@@ -400,7 +456,7 @@ def _save_npy_outputs(
 def _save_csv_outputs(
     pipeline: PulsePipeline,
     output_dir: Path,
-) -> tuple[Path, Path, Path, Path, Path, Path, Path, Path]:
+) -> tuple[Path, ...]:
     spectrum_path = _save_table_csv(
         output_dir / "spectrum.csv",
         _spectrum_columns(pipeline),
@@ -436,12 +492,8 @@ def _save_csv_outputs(
         output_dir / "optimal-filter-baseline-pulse-height.csv",
         optimal_filter_outputs["optimal_filter_baseline_pulse_height"],
     )
-    drift_corrected_path = _save_table_csv(
-        output_dir / "optimal-filter-drift-corrected-pulse-height.csv",
-        optimal_filter_outputs["optimal_filter_drift_corrected_pulse_height"],
-    )
 
-    return (
+    paths = [
         spectrum_path,
         template_path,
         template_fft_path,
@@ -449,8 +501,15 @@ def _save_csv_outputs(
         filter_template_path,
         pulse_height_path,
         baseline_pha_path,
-        drift_corrected_path,
-    )
+    ]
+    if "optimal_filter_drift_corrected_pulse_height" in optimal_filter_outputs:
+        paths.append(
+            _save_table_csv(
+                output_dir / "optimal-filter-drift-corrected-pulse-height.csv",
+                optimal_filter_outputs["optimal_filter_drift_corrected_pulse_height"],
+            )
+        )
+    return tuple(paths)
 
 
 def _save_pipeline_outputs(
@@ -497,7 +556,7 @@ def save_pulse_plots(
     output_dir: Path,
     max_points_per_trace: int | None = MAX_POINTS_PER_TRACE,
     max_traces: int | None = MAX_TRACES_PER_DATASET,
-    steps: tuple[str, ...] = DEFAULT_STEPS,
+    steps: tuple[str, ...] | None = None,
     dpi: int = 150,
     config: PulseAnalysisConfig | None = None,
     save_config_path: Path | None = None,
@@ -513,13 +572,14 @@ def save_pulse_plots(
     source = PulseDataSource(pulse_data)
     pipeline = PulsePipeline(source, effective_config)
     renderer = PulsePlotRenderer(pipeline, pulse_data.file_path)
+    output_steps = pulse_steps(effective_config) if steps is None else steps
     output_paths = _save_pipeline_outputs(
         pulse_data,
         pipeline,
         renderer,
         output_dir,
         effective_config,
-        steps,
+        output_steps,
         dpi,
         array_format=array_format,
         savefig_progress_callback=savefig_progress_callback,

@@ -1,16 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
-
-
-@dataclass(frozen=True)
-class BaselineDriftCorrectionResult:
-    pha_corrected: np.ndarray
-    slope: float
-    intercept: float
-    reference_baseline: float
 
 
 def differential_signal(aligned_signal: np.ndarray) -> np.ndarray:
@@ -164,44 +154,55 @@ def baseline_drift_corrected_pulse_heights(
     baseline: np.ndarray,
     pha: np.ndarray,
     enabled: bool,
-) -> BaselineDriftCorrectionResult:
+    baseline_min: float | None = None,
+    baseline_max: float | None = None,
+    pha_min: float | None = None,
+    pha_max: float | None = None,
+) -> tuple[np.ndarray, float, float, float, int, np.ndarray]:
     """Remove a linear baseline drift term from optimal-filter pulse heights.
 
-    The corrected values preserve the pulse-height scale at the mean finite
-    baseline: pha_corrected = pha - slope * (baseline - mean(baseline)).
+    Fit points are finite baseline/PHA pairs that also fall inside the optional
+    baseline and PHA ranges. The corrected values preserve the pulse-height scale
+    at the mean baseline of the fit points.
     """
     baseline_values = np.asarray(baseline, dtype=float)
     pha_values = np.asarray(pha, dtype=float)
     corrected = pha_values.copy()
     finite = np.isfinite(baseline_values) & np.isfinite(pha_values)
-    if np.any(finite):
-        reference_baseline = float(np.mean(baseline_values[finite]))
-        intercept = float(np.mean(pha_values[finite]))
+    fit_mask = finite.copy()
+    if baseline_min is not None:
+        fit_mask &= baseline_values >= baseline_min
+    if baseline_max is not None:
+        fit_mask &= baseline_values <= baseline_max
+    if pha_min is not None:
+        fit_mask &= pha_values >= pha_min
+    if pha_max is not None:
+        fit_mask &= pha_values <= pha_max
+
+    fit_count = int(np.count_nonzero(fit_mask))
+    if fit_count:
+        reference_baseline = float(np.mean(baseline_values[fit_mask]))
+        intercept = float(np.mean(pha_values[fit_mask]))
     else:
         reference_baseline = float("nan")
         intercept = float("nan")
 
-    if (
-        not enabled
-        or np.count_nonzero(finite) < 2
-        or np.ptp(baseline_values[finite]) == 0
-    ):
-        return BaselineDriftCorrectionResult(
-            pha_corrected=corrected,
-            slope=0.0,
-            intercept=intercept,
-            reference_baseline=reference_baseline,
-        )
+    if not enabled or fit_count < 2 or np.ptp(baseline_values[fit_mask]) == 0:
+        return corrected, 0.0, intercept, reference_baseline, fit_count, fit_mask
 
-    slope, intercept = np.polyfit(baseline_values[finite], pha_values[finite], deg=1)
+    slope, intercept = np.polyfit(
+        baseline_values[fit_mask], pha_values[fit_mask], deg=1
+    )
     corrected[finite] = pha_values[finite] - slope * (
         baseline_values[finite] - reference_baseline
     )
-    return BaselineDriftCorrectionResult(
-        pha_corrected=corrected,
-        slope=float(slope),
-        intercept=float(intercept),
-        reference_baseline=reference_baseline,
+    return (
+        corrected,
+        float(slope),
+        float(intercept),
+        reference_baseline,
+        fit_count,
+        fit_mask,
     )
 
 
