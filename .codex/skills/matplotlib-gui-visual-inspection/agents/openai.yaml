@@ -1,0 +1,4 @@
+interface:
+  display_name: "Matplotlib GUI Visual Inspection"
+  short_description: "REPL inspection for Matplotlib GUIs"
+  default_prompt: "Use $matplotlib-gui-visual-inspection to construct a Matplotlib GUI without blocking on show(), inspect live Figure/Axes/widget objects, drive representative states, and save screenshots or summaries."
