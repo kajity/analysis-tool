@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 from matplotlib.axes import Axes
 
 try:
@@ -207,7 +208,22 @@ class PulsePlotRenderer:
             s=6,
             alpha=0.35,
             linewidths=0,
+            label="raw",
         )
+        finite = np.isfinite(result.baseline) & np.isfinite(result.pha)
+        if np.count_nonzero(finite) >= 2 and np.ptp(result.baseline[finite]) > 0:
+            x_values = np.array(
+                [np.min(result.baseline[finite]), np.max(result.baseline[finite])]
+            )
+            y_values = result.drift_slope * x_values + result.drift_intercept
+            ax.plot(
+                x_values,
+                y_values,
+                color="tab:red",
+                linewidth=1.2,
+                label=f"linear fit slope={result.drift_slope:.3g}",
+            )
+            ax.legend(loc="best", framealpha=0.9, fontsize="small")
 
     def _draw_empty_optimal_filter(self, ax: Axes) -> None:
         ax.text(

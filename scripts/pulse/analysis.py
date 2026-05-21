@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
+
+
+@dataclass(frozen=True)
+class BaselineDriftCorrectionResult:
+    pha_corrected: np.ndarray
+    slope: float
+    intercept: float
+    reference_baseline: float
 
 
 def differential_signal(aligned_signal: np.ndarray) -> np.ndarray:
@@ -148,6 +158,51 @@ def filter_height_normalization(
         return 0.0
     usable_samples = min(template.size, filter_template.size)
     return float(template[:usable_samples] @ filter_template[:usable_samples])
+
+
+def baseline_drift_corrected_pulse_heights(
+    baseline: np.ndarray,
+    pha: np.ndarray,
+    enabled: bool,
+) -> BaselineDriftCorrectionResult:
+    """Remove a linear baseline drift term from optimal-filter pulse heights.
+
+    The corrected values preserve the pulse-height scale at the mean finite
+    baseline: pha_corrected = pha - slope * (baseline - mean(baseline)).
+    """
+    baseline_values = np.asarray(baseline, dtype=float)
+    pha_values = np.asarray(pha, dtype=float)
+    corrected = pha_values.copy()
+    finite = np.isfinite(baseline_values) & np.isfinite(pha_values)
+    if np.any(finite):
+        reference_baseline = float(np.mean(baseline_values[finite]))
+        intercept = float(np.mean(pha_values[finite]))
+    else:
+        reference_baseline = float("nan")
+        intercept = float("nan")
+
+    if (
+        not enabled
+        or np.count_nonzero(finite) < 2
+        or np.ptp(baseline_values[finite]) == 0
+    ):
+        return BaselineDriftCorrectionResult(
+            pha_corrected=corrected,
+            slope=0.0,
+            intercept=intercept,
+            reference_baseline=reference_baseline,
+        )
+
+    slope, intercept = np.polyfit(baseline_values[finite], pha_values[finite], deg=1)
+    corrected[finite] = pha_values[finite] - slope * (
+        baseline_values[finite] - reference_baseline
+    )
+    return BaselineDriftCorrectionResult(
+        pha_corrected=corrected,
+        slope=float(slope),
+        intercept=float(intercept),
+        reference_baseline=reference_baseline,
+    )
 
 
 def histogram_range(

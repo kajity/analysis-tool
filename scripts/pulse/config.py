@@ -20,6 +20,7 @@ class PulseAnalysisConfig:
     spectrum_chunk_size: int = 512
     negative_pulses: bool = True
     optimal_filter_template_normalize: bool = True
+    baseline_drift_correction: bool = True
 
     def validated(self) -> PulseAnalysisConfig:
         if self.max_points_per_trace is not None and self.max_points_per_trace < 1:
@@ -101,9 +102,11 @@ def parse_config_updates(
             parsed[key] = "auto" if text.lower() == "auto" else int(text)
         elif key in {"histogram_min", "histogram_max"}:
             parsed[key] = None if text.lower() in {"", "none", "null"} else float(text)
-        elif key == "negative_pulses":
-            parsed[key] = text.lower() in {"1", "true", "yes", "on"}
-        elif key == "optimal_filter_template_normalize":
+        elif key in {
+            "negative_pulses",
+            "optimal_filter_template_normalize",
+            "baseline_drift_correction",
+        }:
             parsed[key] = text.lower() in {"1", "true", "yes", "on"}
         else:
             raise ValueError(f"Unknown pulse config key: {key}")

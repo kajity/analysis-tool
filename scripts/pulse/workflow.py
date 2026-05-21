@@ -44,19 +44,15 @@ STEP_INFO_TEXT = {
         "Baseline-subtracted waveforms are plotted from /waveform/wave using "
         "/waveform/vres and /waveform/hres."
     ),
-    "Reject/Shaping": (
-        "Reject/Shaping\n\n"
+    "Reduction": (
+        "Reduction\n\n"
         "A trace is accepted when every diff outside the valid pulse range stays "
-        "within the configured threshold."
+        "within the configured threshold. Accepted traces are baseline-subtracted "
+        "for downstream pulse-height analysis."
     ),
-    "Preprocess": (
-        "Preprocess\n\n"
-        "This stage is reserved for corrections after pulse rejection. Current "
-        "preprocessing is baseline subtraction only."
-    ),
-    "Spectrum": (
-        "Spectrum\n\n"
-        "Pulse heights are calculated from shaped pulses by taking the minimum "
+    "PH": (
+        "PH\n\n"
+        "Pulse heights are calculated from reduced pulses by taking the minimum "
         "sample value in each trace, then counting those heights in histogram bins. "
         "The bins, min, and max controls set the histogram range."
     ),
@@ -82,6 +78,11 @@ STEP_INFO_TEXT = {
         "Baseline vs Optimal Filter Pulse Height\n\n"
         "The background-window average for each accepted trace is plotted against "
         "that trace's optimal-filter pulse height."
+    ),
+    "Drift-Corrected Optimal Filter Pulse Height": (
+        "Drift-Corrected Optimal Filter Pulse Height\n\n"
+        "Optimal-filter pulse heights are corrected by subtracting the fitted "
+        "linear dependence on baseline around the mean baseline."
     ),
 }
 
@@ -113,16 +114,14 @@ class PulseWorkflow:
 
     @property
     def can_finish(self) -> bool:
-        return self.step_index == len(self.steps) - 1 and not self.finished
+        return not self.finished
 
-    @property
-    def can_reset(self) -> bool:
-        return self.step_index != 0 or self.finished
-
-    def reset(self) -> None:
-        self.step_index = 0
-        self.finished = False
-        self.events.append("reset")
+    def go_to_step(self, step_index: int) -> bool:
+        if self.finished or not 0 <= step_index < len(self.steps):
+            return False
+        self.step_index = step_index
+        self.events.append(f"step:{self.current_step}")
+        return True
 
     def back(self) -> bool:
         if not self.can_go_back:
@@ -192,7 +191,7 @@ class PulseWorkflowController:
             can_go_back=self.workflow.can_go_back,
             can_go_next=self.workflow.can_go_next,
             can_finish=self.workflow.can_finish,
-            can_reset=self.workflow.can_reset,
+            finished=self.workflow.finished,
             info_text=self.info_text(step),
             config_values=self.config_values(),
             status_text=self.pipeline.status_text(step),
@@ -214,9 +213,9 @@ class PulseWorkflowController:
         if self.workflow.next():
             self.render()
 
-    def reset(self) -> None:
-        self.workflow.reset()
-        self.render()
+    def go_to_step(self, step_index: int) -> None:
+        if self.workflow.go_to_step(step_index):
+            self.render()
 
     def finish(self) -> None:
         if self.workflow.finish():
@@ -257,6 +256,9 @@ class PulseWorkflowController:
             "spectrum_bins": str(values["spectrum_bins"]),
             "histogram_min": self._optional_config_text(values["histogram_min"]),
             "histogram_max": self._optional_config_text(values["histogram_max"]),
+            "baseline_drift_correction": str(
+                values["baseline_drift_correction"]
+            ).lower(),
         }
 
     def _optional_config_text(self, value: object) -> str:
@@ -338,6 +340,7 @@ def _optimal_filter_output_columns(
     prep = pipeline.optimal_filter_prep()
     heights = pipeline.optimal_filter_pulse_height()
     baseline_pha = pipeline.baseline_optimal_filter_pulse_height()
+    drift_corrected = pipeline.drift_corrected_optimal_filter_pulse_height()
     return {
         "optimal_filter_template": {
             "time": prep.template_times,
@@ -364,6 +367,18 @@ def _optimal_filter_output_columns(
         "optimal_filter_baseline_pulse_height": {
             "baseline": baseline_pha.baseline,
             "pha": baseline_pha.pha,
+            "pha_corrected": baseline_pha.pha_corrected,
+        },
+        "optimal_filter_drift_correction": {
+            "enabled": np.array([baseline_pha.drift_correction_enabled]),
+            "slope": np.array([baseline_pha.drift_slope]),
+            "intercept": np.array([baseline_pha.drift_intercept]),
+            "reference_baseline": np.array([baseline_pha.drift_reference_baseline]),
+        },
+        "optimal_filter_drift_corrected_pulse_height": {
+            "bin_left": drift_corrected.bin_edges[:-1],
+            "bin_right": drift_corrected.bin_edges[1:],
+            "count": drift_corrected.counts,
         },
     }
 
@@ -385,7 +400,7 @@ def _save_npy_outputs(
 def _save_csv_outputs(
     pipeline: PulsePipeline,
     output_dir: Path,
-) -> tuple[Path, Path, Path, Path, Path, Path, Path]:
+) -> tuple[Path, Path, Path, Path, Path, Path, Path, Path]:
     spectrum_path = _save_table_csv(
         output_dir / "spectrum.csv",
         _spectrum_columns(pipeline),
@@ -421,6 +436,10 @@ def _save_csv_outputs(
         output_dir / "optimal-filter-baseline-pulse-height.csv",
         optimal_filter_outputs["optimal_filter_baseline_pulse_height"],
     )
+    drift_corrected_path = _save_table_csv(
+        output_dir / "optimal-filter-drift-corrected-pulse-height.csv",
+        optimal_filter_outputs["optimal_filter_drift_corrected_pulse_height"],
+    )
 
     return (
         spectrum_path,
@@ -430,6 +449,7 @@ def _save_csv_outputs(
         filter_template_path,
         pulse_height_path,
         baseline_pha_path,
+        drift_corrected_path,
     )
 
 
