@@ -1,19 +1,32 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
 
 import h5py
+import matplotlib
+
+matplotlib.use("Agg", force=True)
+import matplotlib.pyplot as plt
 import numpy as np
 
 from scripts.pulse import analysis as pulse_analysis
 from scripts.pulse.config import PulseAnalysisConfig, load_config, save_config
 from scripts.pulse.datasource import PulseDataSource
 from scripts.pulse.main import parse_args
-from scripts.pulse.pipeline import PulsePipeline, PulseStage
+from scripts.pulse.pipeline import PhaTimelineResult, PulsePipeline, PulseStage
 from scripts.pulse.pulse_io import open_hdf5_pulse_data
-from scripts.pulse.workflow import PulseWorkflow, pulse_steps, save_pulse_plots
+from scripts.pulse.rendering import PulsePlotRenderer
+from scripts.pulse.workflow import (
+    PulseWorkflow,
+    PulseWorkflowController,
+    _fit_terminal_line,
+    pulse_steps,
+    save_pulse_plots,
+)
 
 
 def write_test_hdf5(path: Path) -> None:
@@ -77,20 +90,105 @@ class PulseWorkflowNavigationTest(unittest.TestCase):
     def test_default_steps_use_reduction_and_ph_labels(self) -> None:
         self.assertIn(PulseStage.REDUCTION.value, PulseWorkflow().steps)
         self.assertIn(PulseStage.PH.value, PulseWorkflow().steps)
+        self.assertIn(PulseStage.PHA_TIMELINE.value, PulseWorkflow().steps)
         self.assertNotIn("Reject/Shaping", PulseWorkflow().steps)
         self.assertNotIn("Preprocess", PulseWorkflow().steps)
         self.assertNotIn("Spectrum", PulseWorkflow().steps)
         self.assertNotIn(
-            PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value,
+            PulseStage.DRIFT_CORRECTED_PHA.value,
             PulseWorkflow().steps,
         )
 
     def test_drift_correction_steps_are_enabled_from_config(self) -> None:
         steps = pulse_steps(PulseAnalysisConfig(baseline_drift_correction=True))
 
-        self.assertIn(
-            PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value, steps
+        self.assertIn(PulseStage.DRIFT_CORRECTED_PHA.value, steps)
+
+
+class PulseProgressOutputTest(unittest.TestCase):
+    def test_fit_terminal_line_truncates_to_width(self) -> None:
+        text = "Saving figure 10/10: Drift-Corrected PHA -> /very/long/output/path.png"
+
+        fitted = _fit_terminal_line(text, 32)
+
+        self.assertLessEqual(len(fitted), 32)
+        self.assertIn("...", fitted)
+
+    def test_fit_terminal_line_handles_tiny_width(self) -> None:
+        self.assertEqual(_fit_terminal_line("abcdef", 2), "ab")
+
+
+class PulseWorkflowControllerTest(unittest.TestCase):
+    def test_finish_prints_minimal_analysis_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                config = PulseAnalysisConfig(
+                    valid_pulse_range_start=1,
+                    valid_pulse_range_stop=2,
+                    valid_pulse_diff_threshold=3,
+                    spectrum_chunk_size=2,
+                ).validated()
+                controller = PulseWorkflowController(
+                    pulse_data,
+                    max_points_per_trace=None,
+                    max_traces=None,
+                    config=config,
+                )
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        controller.render()
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        controller.finish()
+                finally:
+                    controller.ui.close()
+
+            terminal_text = output.getvalue()
+            self.assertIn("[pulse] Analysis summary", terminal_text)
+            self.assertIn("accepted: 3", terminal_text)
+            self.assertIn("rejected: 1", terminal_text)
+            self.assertIn("PHA points: 3", terminal_text)
+            self.assertIn("drift correction: disabled", terminal_text)
+            self.assertNotIn("UI info summary", terminal_text)
+            self.assertNotIn("valid range:", terminal_text)
+
+    def test_analysis_summary_includes_drift_fit_result_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_drift_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                config = PulseAnalysisConfig(
+                    valid_pulse_range_start=0,
+                    valid_pulse_range_stop=3,
+                    valid_pulse_diff_threshold=0,
+                    spectrum_bins=3,
+                    spectrum_chunk_size=2,
+                    baseline_drift_correction=True,
+                ).validated()
+                controller = PulseWorkflowController(
+                    pulse_data,
+                    max_points_per_trace=None,
+                    max_traces=None,
+                    config=config,
+                )
+                try:
+                    summary = controller.analysis_summary_text()
+                finally:
+                    controller.ui.close()
+
+            self.assertIn("drift correction: enabled", summary)
+            self.assertIn("drift slope:", summary)
+            self.assertIn("drift reference baseline:", summary)
+            self.assertIn("drift fit points:", summary)
+
+    def test_optional_config_text_limits_float_precision(self) -> None:
+        self.assertEqual(
+            PulseWorkflowController._optional_config_text(None, 1.23456789),
+            "1.23457",
         )
+        self.assertEqual(PulseWorkflowController._optional_config_text(None, None), "")
 
 
 class PulseAnalysisFunctionTest(unittest.TestCase):
@@ -441,6 +539,65 @@ class PulsePipelineTest(unittest.TestCase):
             self.assertTrue(np.all(np.isfinite(result.pha)))
             self.assertGreater(abs(result.normalization), 0)
 
+    def test_pha_timeline_pairs_accepted_pulse_index_and_pha(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                config = PulseAnalysisConfig(
+                    valid_pulse_range_start=1,
+                    valid_pulse_range_stop=2,
+                    valid_pulse_diff_threshold=3,
+                    spectrum_chunk_size=2,
+                ).validated()
+                pipeline = PulsePipeline(PulseDataSource(pulse_data), config)
+                baseline_pha = pipeline.baseline_optimal_filter_pulse_height()
+                timeline = pipeline.pha_timeline()
+
+            np.testing.assert_array_equal(timeline.pulse_indices, np.arange(3))
+            np.testing.assert_allclose(timeline.pha, baseline_pha.pha)
+            self.assertEqual(timeline.accepted_count, 3)
+            self.assertEqual(timeline.rejected_count, 1)
+
+    def test_pha_timeline_uses_drift_corrected_pha_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_drift_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                config = PulseAnalysisConfig(
+                    valid_pulse_range_start=0,
+                    valid_pulse_range_stop=3,
+                    valid_pulse_diff_threshold=0,
+                    spectrum_bins=3,
+                    spectrum_chunk_size=2,
+                    baseline_drift_correction=True,
+                ).validated()
+                pipeline = PulsePipeline(PulseDataSource(pulse_data), config)
+                corrected = pipeline.drift_corrected_optimal_filter_pulse_height()
+                timeline = pipeline.pha_timeline()
+
+            np.testing.assert_allclose(timeline.pha, corrected.pha)
+
+    def test_pha_timeline_renderer_uses_markers_without_lines(self) -> None:
+        fig, ax = plt.subplots()
+        try:
+            renderer = PulsePlotRenderer.__new__(PulsePlotRenderer)
+            renderer._draw_pha_timeline(
+                ax,
+                PhaTimelineResult(
+                    pulse_indices=np.array([0, 1, 2]),
+                    pha=np.array([10.0, 11.0, 9.0]),
+                    accepted_count=3,
+                    rejected_count=0,
+                    normalization=1.0,
+                ),
+            )
+
+            self.assertEqual(len(ax.lines), 0)
+            self.assertEqual(len(ax.collections), 1)
+        finally:
+            plt.close(fig)
+
     def test_baseline_drift_correction_removes_linear_pha_dependence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "pulse.hdf5"
@@ -515,11 +672,11 @@ class PulsePipelineTest(unittest.TestCase):
                 )
 
                 self.assertNotIn(
-                    PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value,
+                    PulseStage.BASELINE_PHA.value,
                     pipeline._cache,
                 )
                 self.assertNotIn(
-                    PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value,
+                    PulseStage.DRIFT_CORRECTED_PHA.value,
                     pipeline._cache,
                 )
 
@@ -558,19 +715,19 @@ class PulsePipelineTest(unittest.TestCase):
                     prep,
                 )
                 self.assertIs(
-                    pipeline.result_for_stage("Optimal Filter Pulse Height"),
+                    pipeline.result_for_stage("PHA"),
                     pipeline.optimal_filter_pulse_height(),
                 )
                 self.assertIs(
-                    pipeline.result_for_stage(
-                        PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value
-                    ),
+                    pipeline.result_for_stage(PulseStage.PHA_TIMELINE.value),
+                    pipeline.pha_timeline(),
+                )
+                self.assertIs(
+                    pipeline.result_for_stage(PulseStage.BASELINE_PHA.value),
                     pipeline.baseline_optimal_filter_pulse_height(),
                 )
                 self.assertIs(
-                    pipeline.result_for_stage(
-                        PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value
-                    ),
+                    pipeline.result_for_stage(PulseStage.DRIFT_CORRECTED_PHA.value),
                     pipeline.drift_corrected_optimal_filter_pulse_height(),
                 )
 
@@ -606,6 +763,7 @@ class PulsePipelineTest(unittest.TestCase):
             self.assertIn("spectrum", payload)
             self.assertIn("optimal_filter_template", payload)
             self.assertIn("optimal_filter_template_fft", payload)
+            self.assertIn("optimal_filter_pha_timeline", payload)
             self.assertIn("optimal_filter_baseline_pulse_height", payload)
             self.assertNotIn("optimal_filter_drift_correction", payload)
             self.assertNotIn("optimal_filter_drift_corrected_pulse_height", payload)
@@ -613,6 +771,10 @@ class PulsePipelineTest(unittest.TestCase):
             self.assertEqual(
                 payload["optimal_filter_baseline_pulse_height"]["baseline"].shape,
                 (3,),
+            )
+            np.testing.assert_array_equal(
+                payload["optimal_filter_pha_timeline"]["pulse_index"],
+                np.arange(3),
             )
 
     def test_save_pulse_plots_includes_drift_outputs_when_enabled(self) -> None:
@@ -670,6 +832,7 @@ class PulsePipelineTest(unittest.TestCase):
             names = {path.name for path in paths}
             self.assertIn("spectrum.csv", names)
             self.assertIn("optimal-filter-template.csv", names)
+            self.assertIn("optimal-filter-pha-timeline.csv", names)
             self.assertIn("optimal-filter-baseline-pulse-height.csv", names)
             self.assertNotIn("optimal-filter-drift-corrected-pulse-height.csv", names)
             self.assertNotIn("pulse-results.npy", names)

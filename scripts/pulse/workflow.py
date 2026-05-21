@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,19 +69,24 @@ STEP_INFO_TEXT = {
         "Optimal Filter Template\n\n"
         "Time-domain inverse FFT of signal FFT divided by noise FFT squared."
     ),
-    "Optimal Filter Pulse Height": (
-        "Optimal Filter Pulse Height\n\n"
+    "PHA": (
+        "PHA\n\n"
         "Accepted pulses are projected onto the optimal-filter template to estimate "
         "pulse heights, then counted in histogram bins. The bins, min, and max "
         "controls set the histogram range."
     ),
-    "Baseline vs Optimal Filter Pulse Height": (
-        "Baseline vs Optimal Filter Pulse Height\n\n"
+    "PHA Timeline": (
+        "PHA Timeline\n\n"
+        "Accepted-pulse PHA values are plotted in the same order as the pulse "
+        "array, using accepted pulse index on the horizontal axis."
+    ),
+    "Baseline/PHA": (
+        "Baseline/PHA\n\n"
         "The background-window average for each accepted trace is plotted against "
         "that trace's optimal-filter pulse height."
     ),
-    "Drift-Corrected Optimal Filter Pulse Height": (
-        "Drift-Corrected Optimal Filter Pulse Height\n\n"
+    "Drift-Corrected PHA": (
+        "Drift-Corrected PHA\n\n"
         "Optimal-filter pulse heights are corrected by subtracting the fitted "
         "linear dependence on baseline around the mean baseline."
     ),
@@ -247,7 +253,44 @@ class PulseWorkflowController:
                 print("\nSaved pulse outputs:")
                 for output_path in output_paths:
                     print(f"- {output_path}")
+            print(f"\n{self.analysis_summary_text()}")
             self.ui.close()
+
+    def analysis_summary_text(self) -> str:
+        baseline_pha = self.pipeline.baseline_optimal_filter_pulse_height()
+        pha = (
+            baseline_pha.drift.pha_corrected
+            if baseline_pha.drift is not None
+            else baseline_pha.pha
+        )
+        finite_pha = pha[np.isfinite(pha)]
+        lines = [
+            "[pulse] Analysis summary",
+            f"traces: {self.source.trace_count}",
+            f"accepted: {baseline_pha.accepted_count}",
+            f"rejected: {baseline_pha.rejected_count}",
+            f"PHA points: {pha.size}",
+            f"optimal filter normalization: {baseline_pha.normalization:g}",
+        ]
+        if finite_pha.size:
+            lines.extend(
+                [
+                    f"PHA mean: {float(np.mean(finite_pha)):g}",
+                    f"PHA std: {float(np.std(finite_pha)):g}",
+                ]
+            )
+        if baseline_pha.drift is not None:
+            lines.extend(
+                [
+                    "drift correction: enabled",
+                    f"drift slope: {baseline_pha.drift.slope:g}",
+                    f"drift reference baseline: {baseline_pha.drift.reference_baseline:g}",
+                    f"drift fit points: {baseline_pha.drift.fit_count}",
+                ]
+            )
+        else:
+            lines.append("drift correction: disabled")
+        return "\n".join(lines)
 
     def apply_baseline_drift_range(
         self,
@@ -313,7 +356,11 @@ class PulseWorkflowController:
         return config_values
 
     def _optional_config_text(self, value: object) -> str:
-        return "" if value is None else str(value)
+        if value is None:
+            return ""
+        if isinstance(value, float):
+            return f"{value:.6g}"
+        return str(value)
 
 
 def launch_pulse_workflow(
@@ -344,16 +391,32 @@ def _run_output_dir(output_dir: Path, pulse_data: Hdf5PulseData) -> Path:
     return output_dir / pulse_data.file_path.stem
 
 
+def _fit_terminal_line(text: str, width: int) -> str:
+    width = max(1, width)
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    keep = width - 3
+    head = keep // 2
+    tail = keep - head
+    return f"{text[:head]}...{text[-tail:]}"
+
+
 def print_savefig_progress(
     current: int,
     total: int,
     step: str,
     output_path: Path,
 ) -> None:
-    end = "\n" if current >= total else ""
-    sys.stdout.write(
-        f"\rSaving figure {current}/{total}: {step} -> {output_path}\033[K{end}"
+    columns = shutil.get_terminal_size(fallback=(80, 24)).columns
+    max_width = max(1, columns - 1)
+    message = _fit_terminal_line(
+        f"Saving figure {current}/{total}: {step} -> {output_path}",
+        max_width,
     )
+    end = "\n" if current >= total else ""
+    sys.stdout.write(f"\r{message}\033[K{end}")
     sys.stdout.flush()
 
 
@@ -391,6 +454,7 @@ def _optimal_filter_output_columns(
     prep = pipeline.optimal_filter_prep()
     heights = pipeline.optimal_filter_pulse_height()
     baseline_pha = pipeline.baseline_optimal_filter_pulse_height()
+    pha_timeline = pipeline.pha_timeline()
     outputs = {
         "optimal_filter_template": {
             "time": prep.template_times,
@@ -413,6 +477,10 @@ def _optimal_filter_output_columns(
             "bin_left": heights.bin_edges[:-1],
             "bin_right": heights.bin_edges[1:],
             "count": heights.counts,
+        },
+        "optimal_filter_pha_timeline": {
+            "pulse_index": pha_timeline.pulse_indices,
+            "pha": pha_timeline.pha,
         },
         "optimal_filter_baseline_pulse_height": {
             "baseline": baseline_pha.baseline,
@@ -488,6 +556,10 @@ def _save_csv_outputs(
         output_dir / "optimal-filter-pulse-height.csv",
         optimal_filter_outputs["optimal_filter_pulse_height"],
     )
+    pha_timeline_path = _save_table_csv(
+        output_dir / "optimal-filter-pha-timeline.csv",
+        optimal_filter_outputs["optimal_filter_pha_timeline"],
+    )
     baseline_pha_path = _save_table_csv(
         output_dir / "optimal-filter-baseline-pulse-height.csv",
         optimal_filter_outputs["optimal_filter_baseline_pulse_height"],
@@ -500,6 +572,7 @@ def _save_csv_outputs(
         noise_path,
         filter_template_path,
         pulse_height_path,
+        pha_timeline_path,
         baseline_pha_path,
     ]
     if "optimal_filter_drift_corrected_pulse_height" in optimal_filter_outputs:

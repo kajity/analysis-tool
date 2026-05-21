@@ -13,6 +13,7 @@ try:
         BaselineOptimalFilterHeightResult,
         OptimalFilterHeightResult,
         OptimalFilterPrepResult,
+        PhaTimelineResult,
         PulsePipeline,
         PulseStage,
         RejectionResult,
@@ -25,6 +26,7 @@ except ImportError:
         BaselineOptimalFilterHeightResult,
         OptimalFilterHeightResult,
         OptimalFilterPrepResult,
+        PhaTimelineResult,
         PulsePipeline,
         PulseStage,
         RejectionResult,
@@ -67,6 +69,8 @@ class PulsePlotRenderer:
             self._draw_spectrum(ax, result)
         elif isinstance(result, OptimalFilterHeightResult):
             self._draw_optimal_filter_height(ax, result)
+        elif isinstance(result, PhaTimelineResult):
+            self._draw_pha_timeline(ax, result)
         elif isinstance(result, BaselineOptimalFilterHeightResult):
             self._draw_baseline_optimal_filter_height(ax, result)
         elif isinstance(result, OptimalFilterPrepResult):
@@ -202,6 +206,26 @@ class PulsePlotRenderer:
             linewidth=1.5,
         )
         ax.set_ylim(bottom=0)
+
+    def _draw_pha_timeline(
+        self,
+        ax: Axes,
+        result: PhaTimelineResult,
+    ) -> None:
+        ax.set_xlabel("Accepted pulse index")
+        ax.set_ylabel(
+            f"Optimized pulse height (ADC count * {VERTICAL_RESOLUTION_DATASET})"
+        )
+        if result.pha.size == 0:
+            self._draw_empty_optimal_filter(ax)
+            return
+        ax.scatter(
+            result.pulse_indices,
+            result.pha,
+            s=10,
+            alpha=0.85,
+            linewidths=0,
+        )
 
     def _draw_baseline_optimal_filter_height(
         self,

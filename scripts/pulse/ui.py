@@ -39,6 +39,23 @@ class PulseUiCallbacks(Protocol):
 
 
 class PulseWizardUI:
+    STANDARD_CONTROL_LAYOUT = {
+        "spectrum_bins": (0.81, 0.310, 0.10, 0.030),
+        "histogram_min": (0.81, 0.265, 0.10, 0.030),
+        "histogram_max": (0.81, 0.220, 0.10, 0.030),
+    }
+    DRIFT_CONTROL_LAYOUT = {
+        "spectrum_bins": (0.81, 0.455, 0.10, 0.030),
+        "histogram_min": (0.81, 0.415, 0.10, 0.030),
+        "histogram_max": (0.81, 0.375, 0.10, 0.030),
+        "baseline_drift_baseline_min": (0.81, 0.335, 0.10, 0.030),
+        "baseline_drift_baseline_max": (0.81, 0.295, 0.10, 0.030),
+        "baseline_drift_pha_min": (0.81, 0.255, 0.10, 0.030),
+        "baseline_drift_pha_max": (0.81, 0.215, 0.10, 0.030),
+    }
+    STANDARD_APPLY_BUTTON_BOUNDS = (0.81, 0.170, 0.10, 0.038)
+    DRIFT_APPLY_BUTTON_BOUNDS = (0.81, 0.165, 0.10, 0.038)
+
     STEP_BUTTON_LABELS = {
         "Raw View": "Raw",
         "Reduction": "Reduction",
@@ -46,9 +63,10 @@ class PulseWizardUI:
         "Optimal Filter Signal FFT": "Signal FFT",
         "Optimal Filter Noise FFT": "Noise FFT",
         "Optimal Filter Template": "Template",
-        "Optimal Filter Pulse Height": "PHA",
-        "Baseline vs Optimal Filter Pulse Height": "Baseline/PHA",
-        "Drift-Corrected Optimal Filter Pulse Height": "Drift PHA",
+        "PHA": "PHA",
+        "PHA Timeline": "PHA Timeline",
+        "Baseline/PHA": "Baseline/PHA",
+        "Drift-Corrected PHA": "Drift PHA",
     }
 
     def __init__(self, callbacks: PulseUiCallbacks) -> None:
@@ -60,27 +78,35 @@ class PulseWizardUI:
         self.ax_info.axis("off")
 
         self.control_boxes: dict[str, TextBox] = {
-            "spectrum_bins": self._make_text_box((0.81, 0.310, 0.10, 0.030), "bins"),
-            "histogram_min": self._make_text_box((0.81, 0.265, 0.10, 0.030), "min"),
-            "histogram_max": self._make_text_box((0.81, 0.220, 0.10, 0.030), "max"),
+            "spectrum_bins": self._make_text_box(
+                self.STANDARD_CONTROL_LAYOUT["spectrum_bins"], "bins"
+            ),
+            "histogram_min": self._make_text_box(
+                self.STANDARD_CONTROL_LAYOUT["histogram_min"], "min"
+            ),
+            "histogram_max": self._make_text_box(
+                self.STANDARD_CONTROL_LAYOUT["histogram_max"], "max"
+            ),
             "baseline_drift_baseline_min": self._make_text_box(
-                (0.81, 0.177, 0.10, 0.030),
+                self.DRIFT_CONTROL_LAYOUT["baseline_drift_baseline_min"],
                 "b min",
             ),
             "baseline_drift_baseline_max": self._make_text_box(
-                (0.81, 0.134, 0.10, 0.030),
+                self.DRIFT_CONTROL_LAYOUT["baseline_drift_baseline_max"],
                 "b max",
             ),
             "baseline_drift_pha_min": self._make_text_box(
-                (0.81, 0.091, 0.10, 0.030),
+                self.DRIFT_CONTROL_LAYOUT["baseline_drift_pha_min"],
                 "p min",
             ),
             "baseline_drift_pha_max": self._make_text_box(
-                (0.81, 0.048, 0.10, 0.030),
+                self.DRIFT_CONTROL_LAYOUT["baseline_drift_pha_max"],
                 "p max",
             ),
         }
-        self.apply_button = self._make_button((0.81, 0.170, 0.10, 0.038), "Apply")
+        self.apply_button = self._make_button(
+            self.STANDARD_APPLY_BUTTON_BOUNDS, "Apply"
+        )
 
         self.next_button = self._make_button((0.07, 0.105, 0.075, 0.040), "Next")
         self.back_button = self._make_button((0.07, 0.055, 0.075, 0.040), "Prev")
@@ -198,12 +224,19 @@ class PulseWizardUI:
         drift_controls_visible = any(
             key.startswith("baseline_drift_") for key in state.config_values
         )
+        control_layout = (
+            self.DRIFT_CONTROL_LAYOUT
+            if drift_controls_visible
+            else self.STANDARD_CONTROL_LAYOUT
+        )
         if drift_controls_visible:
-            self.apply_button.ax.set_position((0.92, 0.048, 0.055, 0.038))
+            self.apply_button.ax.set_position(self.DRIFT_APPLY_BUTTON_BOUNDS)
         else:
-            self.apply_button.ax.set_position((0.81, 0.170, 0.10, 0.038))
+            self.apply_button.ax.set_position(self.STANDARD_APPLY_BUTTON_BOUNDS)
         for key, text_box in self.control_boxes.items():
             visible = key in state.config_values
+            if visible:
+                text_box.ax.set_position(control_layout[key])
             text_box.ax.set_visible(visible)
             text_box.set_active(visible)
             if visible:

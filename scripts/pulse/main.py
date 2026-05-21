@@ -59,6 +59,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Enable baseline/PHA drift correction and show drift controls.",
     )
     drift_group.add_argument(
+        "-n-d",
         "--no-drift-correction",
         dest="baseline_drift_correction",
         action="store_false",

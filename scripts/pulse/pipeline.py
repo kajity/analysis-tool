@@ -23,21 +23,16 @@ class PulseStage(StrEnum):
     OPTIMAL_FILTER_SIGNAL_FFT = "Optimal Filter Signal FFT"
     OPTIMAL_FILTER_NOISE_FFT = "Optimal Filter Noise FFT"
     OPTIMAL_FILTER_TEMPLATE = "Optimal Filter Template"
-    OPTIMAL_FILTER_PULSE_HEIGHT = "Optimal Filter Pulse Height"
-    BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT = "Baseline vs Optimal Filter Pulse Height"
-    DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT = (
-        "Drift-Corrected Optimal Filter Pulse Height"
-    )
+    PHA = "PHA"
+    PHA_TIMELINE = "PHA Timeline"
+    BASELINE_PHA = "Baseline/PHA"
+    DRIFT_CORRECTED_PHA = "Drift-Corrected PHA"
 
 
 DEFAULT_STAGES = tuple(
-    stage.value
-    for stage in PulseStage
-    if stage is not PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT
+    stage.value for stage in PulseStage if stage is not PulseStage.DRIFT_CORRECTED_PHA
 )
-DRIFT_CORRECTION_STAGES = DEFAULT_STAGES + (
-    PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value,
-)
+DRIFT_CORRECTION_STAGES = DEFAULT_STAGES + (PulseStage.DRIFT_CORRECTED_PHA.value,)
 OPTIMAL_FILTER_PREP_CACHE_KEY = "Optimal Filter Prep"
 
 
@@ -99,6 +94,15 @@ class OptimalFilterHeightResult:
 
 
 @dataclass(frozen=True)
+class PhaTimelineResult:
+    pulse_indices: np.ndarray
+    pha: np.ndarray
+    accepted_count: int
+    rejected_count: int
+    normalization: float
+
+
+@dataclass(frozen=True)
 class DriftCorrectionResult:
     pha_corrected: np.ndarray
     slope: float
@@ -123,6 +127,9 @@ class PulsePipeline:
         self.source = source
         self.config = config.validated()
         self._cache: dict[str, Any] = {}
+
+    def _cache_miss(self, key: str) -> bool:
+        return key not in self._cache
 
     def update_config(self, config: PulseAnalysisConfig) -> None:
         old_config = self.config
@@ -171,17 +178,18 @@ class PulsePipeline:
             self._cache.pop(PulseStage.OPTIMAL_FILTER_SIGNAL_FFT.value, None)
             self._cache.pop(PulseStage.OPTIMAL_FILTER_NOISE_FFT.value, None)
             self._cache.pop(PulseStage.OPTIMAL_FILTER_TEMPLATE.value, None)
-            self._cache.pop(PulseStage.OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
-            self._cache.pop(PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
+            self._cache.pop(PulseStage.PHA.value, None)
+            self._cache.pop(PulseStage.PHA_TIMELINE.value, None)
+            self._cache.pop(PulseStage.BASELINE_PHA.value, None)
             self._cache.pop(
-                PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value,
+                PulseStage.DRIFT_CORRECTED_PHA.value,
                 None,
             )
         if changed & spectrum_keys:
             self._cache.pop(PulseStage.PH.value, None)
-            self._cache.pop(PulseStage.OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
+            self._cache.pop(PulseStage.PHA.value, None)
             self._cache.pop(
-                PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value,
+                PulseStage.DRIFT_CORRECTED_PHA.value,
                 None,
             )
         if changed & optimal_filter_keys:
@@ -189,16 +197,18 @@ class PulsePipeline:
             self._cache.pop(PulseStage.OPTIMAL_FILTER_SIGNAL_FFT.value, None)
             self._cache.pop(PulseStage.OPTIMAL_FILTER_NOISE_FFT.value, None)
             self._cache.pop(PulseStage.OPTIMAL_FILTER_TEMPLATE.value, None)
-            self._cache.pop(PulseStage.OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
-            self._cache.pop(PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
+            self._cache.pop(PulseStage.PHA.value, None)
+            self._cache.pop(PulseStage.PHA_TIMELINE.value, None)
+            self._cache.pop(PulseStage.BASELINE_PHA.value, None)
             self._cache.pop(
-                PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value,
+                PulseStage.DRIFT_CORRECTED_PHA.value,
                 None,
             )
         if changed & drift_correction_keys:
-            self._cache.pop(PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value, None)
+            self._cache.pop(PulseStage.PHA_TIMELINE.value, None)
+            self._cache.pop(PulseStage.BASELINE_PHA.value, None)
             self._cache.pop(
-                PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value,
+                PulseStage.DRIFT_CORRECTED_PHA.value,
                 None,
             )
 
@@ -215,17 +225,19 @@ class PulsePipeline:
             return self.optimal_filter_prep()
         if stage == PulseStage.OPTIMAL_FILTER_TEMPLATE.value:
             return self.optimal_filter_prep()
-        if stage == PulseStage.OPTIMAL_FILTER_PULSE_HEIGHT.value:
+        if stage == PulseStage.PHA.value:
             return self.optimal_filter_pulse_height()
-        if stage == PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value:
+        if stage == PulseStage.PHA_TIMELINE.value:
+            return self.pha_timeline()
+        if stage == PulseStage.BASELINE_PHA.value:
             return self.baseline_optimal_filter_pulse_height()
-        if stage == PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value:
+        if stage == PulseStage.DRIFT_CORRECTED_PHA.value:
             return self.drift_corrected_optimal_filter_pulse_height()
         raise ValueError(f"Unknown pulse stage: {stage}")
 
     def raw_view(self) -> TracePlotResult:
         key = PulseStage.RAW_VIEW.value
-        if key not in self._cache:
+        if self._cache_miss(key):
             sample_times, traces = self._sample_traces(self._display_aligned_signal())
             self._cache[key] = TracePlotResult(
                 sample_times=sample_times,
@@ -236,8 +248,8 @@ class PulsePipeline:
         return self._cache[key]
 
     def optimal_filter_pulse_height(self) -> OptimalFilterHeightResult:
-        key = PulseStage.OPTIMAL_FILTER_PULSE_HEIGHT.value
-        if key not in self._cache:
+        key = PulseStage.PHA.value
+        if self._cache_miss(key):
             baseline_pha = self.baseline_optimal_filter_pulse_height()
             if baseline_pha.pha.size:
                 counts, bin_edges = np.histogram(
@@ -263,9 +275,22 @@ class PulsePipeline:
             )
         return self._cache[key]
 
+    def pha_timeline(self) -> PhaTimelineResult:
+        key = PulseStage.PHA_TIMELINE.value
+        if self._cache_miss(key):
+            corrected = self.drift_corrected_optimal_filter_pulse_height()
+            self._cache[key] = PhaTimelineResult(
+                pulse_indices=np.arange(corrected.pha.size),
+                pha=corrected.pha,
+                accepted_count=corrected.accepted_count,
+                rejected_count=corrected.rejected_count,
+                normalization=corrected.normalization,
+            )
+        return self._cache[key]
+
     def drift_corrected_optimal_filter_pulse_height(self) -> OptimalFilterHeightResult:
-        key = PulseStage.DRIFT_CORRECTED_OPTIMAL_FILTER_PULSE_HEIGHT.value
-        if key not in self._cache:
+        key = PulseStage.DRIFT_CORRECTED_PHA.value
+        if self._cache_miss(key):
             baseline_pha = self.baseline_optimal_filter_pulse_height()
             pha = (
                 baseline_pha.drift.pha_corrected
@@ -299,8 +324,8 @@ class PulsePipeline:
     def baseline_optimal_filter_pulse_height(
         self,
     ) -> BaselineOptimalFilterHeightResult:
-        key = PulseStage.BASELINE_OPTIMAL_FILTER_PULSE_HEIGHT.value
-        if key not in self._cache:
+        key = PulseStage.BASELINE_PHA.value
+        if self._cache_miss(key):
             prep = self.optimal_filter_prep()
             baseline_chunks: list[np.ndarray] = []
             pha_chunks: list[np.ndarray] = []
@@ -393,7 +418,7 @@ class PulsePipeline:
 
     def reduction_view(self) -> RejectionResult:
         key = PulseStage.REDUCTION.value
-        if key not in self._cache:
+        if self._cache_miss(key):
             aligned_signal = self._display_aligned_signal()
             mask = pulse_analysis.valid_pulse_mask(
                 pulse_analysis.differential_signal(aligned_signal),
@@ -413,7 +438,7 @@ class PulsePipeline:
 
     def spectrum(self) -> SpectrumResult:
         key = PulseStage.PH.value
-        if key not in self._cache:
+        if self._cache_miss(key):
             pulse_height_chunks: list[np.ndarray] = []
             accepted_count = 0
             rejected_count = 0
@@ -464,7 +489,7 @@ class PulsePipeline:
 
     def optimal_filter_prep(self) -> OptimalFilterPrepResult:
         key = OPTIMAL_FILTER_PREP_CACHE_KEY
-        if key not in self._cache:
+        if self._cache_miss(key):
             template_sum: np.ndarray | None = None
             noise_power_sum: np.ndarray | None = None
             accepted_count = 0
@@ -620,6 +645,7 @@ class PulsePipeline:
             | SpectrumResult
             | OptimalFilterPrepResult
             | OptimalFilterHeightResult
+            | PhaTimelineResult
             | BaselineOptimalFilterHeightResult,
         ):
             lines.extend(
@@ -640,7 +666,7 @@ class PulsePipeline:
         return "\n".join(lines)
 
     def _display_aligned_signal(self) -> np.ndarray:
-        if "display_aligned" not in self._cache:
+        if self._cache_miss("display_aligned"):
             row_indices = self.source.display_trace_indices(
                 self.config.max_display_traces
             )
