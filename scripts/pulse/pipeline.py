@@ -25,12 +25,21 @@ class PulseStage(StrEnum):
     OPTIMAL_FILTER_TEMPLATE = "Optimal Filter Template"
     PHA = "PHA"
     PHA_TIMELINE = "PHA Timeline"
+    PHA_CLUSTER = "PHA Cluster"
+    LOWER_CLUSTER_PHA = "Lower Cluster PHA"
     BASELINE_PHA = "Baseline/PHA"
     DRIFT_CORRECTED_PHA = "Drift-Corrected PHA"
 
 
 DEFAULT_STAGES = tuple(
-    stage.value for stage in PulseStage if stage is not PulseStage.DRIFT_CORRECTED_PHA
+    stage.value
+    for stage in PulseStage
+    if stage
+    not in {
+        PulseStage.PHA_CLUSTER,
+        PulseStage.LOWER_CLUSTER_PHA,
+        PulseStage.DRIFT_CORRECTED_PHA,
+    }
 )
 DRIFT_CORRECTION_STAGES = DEFAULT_STAGES + (PulseStage.DRIFT_CORRECTED_PHA.value,)
 OPTIMAL_FILTER_PREP_CACHE_KEY = "Optimal Filter Prep"
@@ -54,7 +63,7 @@ class RejectionResult:
 
 
 @dataclass(frozen=True)
-class SpectrumResult:
+class PhSpectrumResult:
     pulse_heights: np.ndarray
     counts: np.ndarray
     bin_edges: np.ndarray
@@ -80,7 +89,7 @@ class OptimalFilterPrepResult:
 
 
 @dataclass(frozen=True)
-class OptimalFilterHeightResult:
+class PhaSpectrumResult:
     pha: np.ndarray
     counts: np.ndarray
     bin_edges: np.ndarray
@@ -103,6 +112,21 @@ class PhaTimelineResult:
 
 
 @dataclass(frozen=True)
+class PhaClusterResult:
+    pulse_indices: np.ndarray
+    pha: np.ndarray
+    selected_mask: np.ndarray
+    lower_cluster_mask: np.ndarray
+    upper_cluster_mask: np.ndarray
+    pha_min: float | None
+    pha_max: float | None
+    boundary: float | None
+    accepted_count: int
+    rejected_count: int
+    normalization: float
+
+
+@dataclass(frozen=True)
 class DriftCorrectionResult:
     pha_corrected: np.ndarray
     slope: float
@@ -110,10 +134,15 @@ class DriftCorrectionResult:
     reference_baseline: float
     fit_count: int
     fit_mask: np.ndarray
+    cluster_labels: np.ndarray | None = None
+    cluster_centers: np.ndarray | None = None
+    cluster_iterations: int = 0
+    cluster_slope: float | None = None
+    cluster_boundary: float | None = None
 
 
 @dataclass(frozen=True)
-class BaselineOptimalFilterHeightResult:
+class BaselinePhaResult:
     baseline: np.ndarray
     pha: np.ndarray
     accepted_count: int
@@ -160,6 +189,14 @@ class PulsePipeline:
             "baseline_drift_baseline_max",
             "baseline_drift_pha_min",
             "baseline_drift_pha_max",
+            "baseline_drift_clustering",
+            "baseline_drift_cluster_slope",
+        }
+        pha_cluster_keys = {
+            "pha_clustering",
+            "pha_cluster_pha_min",
+            "pha_cluster_pha_max",
+            "pha_cluster_boundary",
         }
         changed = {
             key
@@ -180,6 +217,8 @@ class PulsePipeline:
             self._cache.pop(PulseStage.OPTIMAL_FILTER_TEMPLATE.value, None)
             self._cache.pop(PulseStage.PHA.value, None)
             self._cache.pop(PulseStage.PHA_TIMELINE.value, None)
+            self._cache.pop(PulseStage.PHA_CLUSTER.value, None)
+            self._cache.pop(PulseStage.LOWER_CLUSTER_PHA.value, None)
             self._cache.pop(PulseStage.BASELINE_PHA.value, None)
             self._cache.pop(
                 PulseStage.DRIFT_CORRECTED_PHA.value,
@@ -188,6 +227,7 @@ class PulsePipeline:
         if changed & spectrum_keys:
             self._cache.pop(PulseStage.PH.value, None)
             self._cache.pop(PulseStage.PHA.value, None)
+            self._cache.pop(PulseStage.LOWER_CLUSTER_PHA.value, None)
             self._cache.pop(
                 PulseStage.DRIFT_CORRECTED_PHA.value,
                 None,
@@ -199,6 +239,8 @@ class PulsePipeline:
             self._cache.pop(PulseStage.OPTIMAL_FILTER_TEMPLATE.value, None)
             self._cache.pop(PulseStage.PHA.value, None)
             self._cache.pop(PulseStage.PHA_TIMELINE.value, None)
+            self._cache.pop(PulseStage.PHA_CLUSTER.value, None)
+            self._cache.pop(PulseStage.LOWER_CLUSTER_PHA.value, None)
             self._cache.pop(PulseStage.BASELINE_PHA.value, None)
             self._cache.pop(
                 PulseStage.DRIFT_CORRECTED_PHA.value,
@@ -206,11 +248,16 @@ class PulsePipeline:
             )
         if changed & drift_correction_keys:
             self._cache.pop(PulseStage.PHA_TIMELINE.value, None)
+            self._cache.pop(PulseStage.PHA_CLUSTER.value, None)
+            self._cache.pop(PulseStage.LOWER_CLUSTER_PHA.value, None)
             self._cache.pop(PulseStage.BASELINE_PHA.value, None)
             self._cache.pop(
                 PulseStage.DRIFT_CORRECTED_PHA.value,
                 None,
             )
+        if changed & pha_cluster_keys:
+            self._cache.pop(PulseStage.PHA_CLUSTER.value, None)
+            self._cache.pop(PulseStage.LOWER_CLUSTER_PHA.value, None)
 
     def result_for_stage(self, stage: str) -> Any:
         if stage == PulseStage.RAW_VIEW.value:
@@ -218,7 +265,7 @@ class PulsePipeline:
         if stage == PulseStage.REDUCTION.value:
             return self.reduction_view()
         if stage == PulseStage.PH.value:
-            return self.spectrum()
+            return self.ph_spectrum()
         if stage == PulseStage.OPTIMAL_FILTER_SIGNAL_FFT.value:
             return self.optimal_filter_prep()
         if stage == PulseStage.OPTIMAL_FILTER_NOISE_FFT.value:
@@ -226,13 +273,17 @@ class PulsePipeline:
         if stage == PulseStage.OPTIMAL_FILTER_TEMPLATE.value:
             return self.optimal_filter_prep()
         if stage == PulseStage.PHA.value:
-            return self.optimal_filter_pulse_height()
+            return self.pha_spectrum()
         if stage == PulseStage.PHA_TIMELINE.value:
             return self.pha_timeline()
+        if stage == PulseStage.PHA_CLUSTER.value:
+            return self.pha_cluster()
+        if stage == PulseStage.LOWER_CLUSTER_PHA.value:
+            return self.lower_cluster_pha_spectrum()
         if stage == PulseStage.BASELINE_PHA.value:
-            return self.baseline_optimal_filter_pulse_height()
+            return self.baseline_pha()
         if stage == PulseStage.DRIFT_CORRECTED_PHA.value:
-            return self.drift_corrected_optimal_filter_pulse_height()
+            return self.drift_corrected_pha_spectrum()
         raise ValueError(f"Unknown pulse stage: {stage}")
 
     def raw_view(self) -> TracePlotResult:
@@ -247,10 +298,10 @@ class PulsePipeline:
             )
         return self._cache[key]
 
-    def optimal_filter_pulse_height(self) -> OptimalFilterHeightResult:
+    def pha_spectrum(self) -> PhaSpectrumResult:
         key = PulseStage.PHA.value
         if self._cache_miss(key):
-            baseline_pha = self.baseline_optimal_filter_pulse_height()
+            baseline_pha = self.baseline_pha()
             if baseline_pha.pha.size:
                 counts, bin_edges = np.histogram(
                     baseline_pha.pha,
@@ -265,7 +316,7 @@ class PulsePipeline:
                 counts = np.array([], dtype=int)
                 bin_edges = np.array([], dtype=float)
 
-            self._cache[key] = OptimalFilterHeightResult(
+            self._cache[key] = PhaSpectrumResult(
                 pha=baseline_pha.pha,
                 counts=counts,
                 bin_edges=bin_edges,
@@ -278,7 +329,7 @@ class PulsePipeline:
     def pha_timeline(self) -> PhaTimelineResult:
         key = PulseStage.PHA_TIMELINE.value
         if self._cache_miss(key):
-            corrected = self.drift_corrected_optimal_filter_pulse_height()
+            corrected = self.drift_corrected_pha_spectrum()
             self._cache[key] = PhaTimelineResult(
                 pulse_indices=np.arange(corrected.pha.size),
                 pha=corrected.pha,
@@ -288,10 +339,76 @@ class PulsePipeline:
             )
         return self._cache[key]
 
-    def drift_corrected_optimal_filter_pulse_height(self) -> OptimalFilterHeightResult:
+    def pha_cluster(self) -> PhaClusterResult:
+        key = PulseStage.PHA_CLUSTER.value
+        if self._cache_miss(key):
+            timeline = self.pha_timeline()
+            finite = np.isfinite(timeline.pha)
+            selected = finite.copy()
+            if self.config.pha_cluster_pha_min is not None:
+                selected &= timeline.pha >= self.config.pha_cluster_pha_min
+            if self.config.pha_cluster_pha_max is not None:
+                selected &= timeline.pha <= self.config.pha_cluster_pha_max
+            boundary = self.config.pha_cluster_boundary
+            if boundary is None:
+                boundary = self._drift_cluster_pha_boundary()
+            if boundary is None:
+                lower_cluster = selected.copy()
+                upper_cluster = np.zeros(timeline.pha.shape, dtype=bool)
+            else:
+                lower_cluster, upper_cluster = pulse_analysis.cluster_pha_timeline(
+                    timeline.pha,
+                    selected,
+                    boundary,
+                )
+            self._cache[key] = PhaClusterResult(
+                pulse_indices=timeline.pulse_indices,
+                pha=timeline.pha,
+                selected_mask=selected,
+                lower_cluster_mask=lower_cluster,
+                upper_cluster_mask=upper_cluster,
+                pha_min=self.config.pha_cluster_pha_min,
+                pha_max=self.config.pha_cluster_pha_max,
+                boundary=boundary,
+                accepted_count=timeline.accepted_count,
+                rejected_count=timeline.rejected_count,
+                normalization=timeline.normalization,
+            )
+        return self._cache[key]
+
+    def lower_cluster_pha_spectrum(self) -> PhaSpectrumResult:
+        key = PulseStage.LOWER_CLUSTER_PHA.value
+        if self._cache_miss(key):
+            cluster = self.pha_cluster()
+            pha = cluster.pha[cluster.lower_cluster_mask]
+            if pha.size:
+                counts, bin_edges = np.histogram(
+                    pha,
+                    bins=self.config.spectrum_bins,
+                    range=pulse_analysis.histogram_range(
+                        pha,
+                        self.config.histogram_min,
+                        self.config.histogram_max,
+                    ),
+                )
+            else:
+                counts = np.array([], dtype=int)
+                bin_edges = np.array([], dtype=float)
+
+            self._cache[key] = PhaSpectrumResult(
+                pha=pha,
+                counts=counts,
+                bin_edges=bin_edges,
+                accepted_count=cluster.accepted_count,
+                rejected_count=cluster.rejected_count,
+                normalization=cluster.normalization,
+            )
+        return self._cache[key]
+
+    def drift_corrected_pha_spectrum(self) -> PhaSpectrumResult:
         key = PulseStage.DRIFT_CORRECTED_PHA.value
         if self._cache_miss(key):
-            baseline_pha = self.baseline_optimal_filter_pulse_height()
+            baseline_pha = self.baseline_pha()
             pha = (
                 baseline_pha.drift.pha_corrected
                 if baseline_pha.drift is not None
@@ -311,7 +428,7 @@ class PulsePipeline:
                 counts = np.array([], dtype=int)
                 bin_edges = np.array([], dtype=float)
 
-            self._cache[key] = OptimalFilterHeightResult(
+            self._cache[key] = PhaSpectrumResult(
                 pha=pha,
                 counts=counts,
                 bin_edges=bin_edges,
@@ -321,9 +438,9 @@ class PulsePipeline:
             )
         return self._cache[key]
 
-    def baseline_optimal_filter_pulse_height(
+    def baseline_pha(
         self,
-    ) -> BaselineOptimalFilterHeightResult:
+    ) -> BaselinePhaResult:
         key = PulseStage.BASELINE_PHA.value
         if self._cache_miss(key):
             prep = self.optimal_filter_prep()
@@ -382,6 +499,11 @@ class PulsePipeline:
 
             drift = None
             if self.config.baseline_drift_correction:
+                slope_override = (
+                    self.config.baseline_drift_cluster_slope
+                    if self.config.baseline_drift_clustering
+                    else None
+                )
                 (
                     pha_corrected,
                     drift_slope,
@@ -397,7 +519,45 @@ class PulsePipeline:
                     baseline_max=self.config.baseline_drift_baseline_max,
                     pha_min=self.config.baseline_drift_pha_min,
                     pha_max=self.config.baseline_drift_pha_max,
+                    fixed_slope=slope_override,
                 )
+                cluster_labels = None
+                cluster_centers = None
+                cluster_iterations = 0
+                cluster_slope = None
+                cluster_boundary = None
+                if self.config.baseline_drift_clustering and drift_fit_count:
+                    (
+                        cluster_labels,
+                        cluster_centers,
+                        cluster_slope,
+                        cluster_iterations,
+                    ) = pulse_analysis.baseline_pha_kmeans_clusters(
+                        baseline,
+                        pha,
+                        drift_fit_mask,
+                        drift_slope,
+                    )
+                    drift_slope = cluster_slope
+                    finite = np.isfinite(baseline) & np.isfinite(pha)
+                    pha_corrected = pha.copy()
+                    pha_corrected[finite] = pha[finite] - drift_slope * (
+                        baseline[finite] - drift_reference_baseline
+                    )
+                    drift_intercept = float(
+                        np.mean(
+                            pha[drift_fit_mask] - drift_slope * baseline[drift_fit_mask]
+                        )
+                    )
+                    if (
+                        cluster_centers is not None
+                        and cluster_centers.size >= 2
+                        and np.isfinite(drift_reference_baseline)
+                    ):
+                        c_boundary = float(np.mean(cluster_centers[:2]))
+                        cluster_boundary = (
+                            c_boundary + drift_slope * drift_reference_baseline
+                        )
                 drift = DriftCorrectionResult(
                     pha_corrected=pha_corrected,
                     slope=drift_slope,
@@ -405,8 +565,13 @@ class PulsePipeline:
                     reference_baseline=drift_reference_baseline,
                     fit_count=drift_fit_count,
                     fit_mask=drift_fit_mask,
+                    cluster_labels=cluster_labels,
+                    cluster_centers=cluster_centers,
+                    cluster_iterations=cluster_iterations,
+                    cluster_slope=cluster_slope,
+                    cluster_boundary=cluster_boundary,
                 )
-            self._cache[key] = BaselineOptimalFilterHeightResult(
+            self._cache[key] = BaselinePhaResult(
                 baseline=baseline,
                 pha=pha,
                 accepted_count=accepted_count,
@@ -436,7 +601,7 @@ class PulsePipeline:
             )
         return self._cache[key]
 
-    def spectrum(self) -> SpectrumResult:
+    def ph_spectrum(self) -> PhSpectrumResult:
         key = PulseStage.PH.value
         if self._cache_miss(key):
             pulse_height_chunks: list[np.ndarray] = []
@@ -478,7 +643,7 @@ class PulsePipeline:
                 counts = np.array([], dtype=int)
                 bin_edges = np.array([], dtype=float)
 
-            self._cache[key] = SpectrumResult(
+            self._cache[key] = PhSpectrumResult(
                 pulse_heights=pulse_heights,
                 counts=counts,
                 bin_edges=bin_edges,
@@ -611,6 +776,30 @@ class PulsePipeline:
             )
         return self._cache[key]
 
+    def _drift_cluster_pha_boundary(self) -> float | None:
+        baseline_pha = self.baseline_pha()
+        drift = baseline_pha.drift
+        if drift is None:
+            return None
+        return drift.cluster_boundary
+
+    def spectrum(self) -> PhSpectrumResult:
+        return self.ph_spectrum()
+
+    def optimal_filter_pulse_height(self) -> PhaSpectrumResult:
+        return self.pha_spectrum()
+
+    def lower_cluster_optimal_filter_pulse_height(self) -> PhaSpectrumResult:
+        return self.lower_cluster_pha_spectrum()
+
+    def drift_corrected_optimal_filter_pulse_height(self) -> PhaSpectrumResult:
+        return self.drift_corrected_pha_spectrum()
+
+    def baseline_optimal_filter_pulse_height(
+        self,
+    ) -> BaselinePhaResult:
+        return self.baseline_pha()
+
     def status_text(self, stage: str) -> str:
         config = self.config
         lines = [
@@ -629,6 +818,8 @@ class PulsePipeline:
                     "baseline drift correction: True",
                     f"drift baseline range: {self._range_text(config.baseline_drift_baseline_min, config.baseline_drift_baseline_max)}",
                     f"drift PHA range: {self._range_text(config.baseline_drift_pha_min, config.baseline_drift_pha_max)}",
+                    f"baseline/PHA clustering: {config.baseline_drift_clustering}",
+                    f"baseline/PHA cluster slope: {self._optional_number_text(config.baseline_drift_cluster_slope)}",
                 ]
             )
         if stage in {
@@ -642,11 +833,12 @@ class PulsePipeline:
         if isinstance(
             cached,
             RejectionResult
-            | SpectrumResult
+            | PhSpectrumResult
             | OptimalFilterPrepResult
-            | OptimalFilterHeightResult
+            | PhaSpectrumResult
             | PhaTimelineResult
-            | BaselineOptimalFilterHeightResult,
+            | PhaClusterResult
+            | BaselinePhaResult,
         ):
             lines.extend(
                 [
@@ -654,7 +846,7 @@ class PulsePipeline:
                     f"rejected: {cached.rejected_count}",
                 ]
             )
-            if isinstance(cached, BaselineOptimalFilterHeightResult) and cached.drift:
+            if isinstance(cached, BaselinePhaResult) and cached.drift:
                 lines.extend(
                     [
                         "drift correction: True",
@@ -688,6 +880,9 @@ class PulsePipeline:
                 return None
             return self.config.histogram_min, self.config.histogram_max
         return self.config.histogram_min, self.config.histogram_max
+
+    def _optional_number_text(self, value: float | None) -> str:
+        return "auto" if value is None else f"{value:g}"
 
     def _range_text(self, lower: float | None, upper: float | None) -> str:
         lower_text = "auto" if lower is None else f"{lower:g}"

@@ -17,7 +17,12 @@ from scripts.pulse import analysis as pulse_analysis
 from scripts.pulse.config import PulseAnalysisConfig, load_config, save_config
 from scripts.pulse.datasource import PulseDataSource
 from scripts.pulse.main import parse_args
-from scripts.pulse.pipeline import PhaTimelineResult, PulsePipeline, PulseStage
+from scripts.pulse.pipeline import (
+    PhaClusterResult,
+    PhaTimelineResult,
+    PulsePipeline,
+    PulseStage,
+)
 from scripts.pulse.pulse_io import open_hdf5_pulse_data
 from scripts.pulse.rendering import PulsePlotRenderer
 from scripts.pulse.workflow import (
@@ -69,6 +74,13 @@ class PulseCliArgumentTest(unittest.TestCase):
         self.assertTrue(enabled.baseline_drift_correction)
         self.assertFalse(disabled.baseline_drift_correction)
 
+    def test_pha_clustering_can_be_set_from_args(self) -> None:
+        enabled = parse_args(["input.hdf5", "--pha-clustering"])
+        disabled = parse_args(["input.hdf5", "--no-pha-clustering"])
+
+        self.assertTrue(enabled.pha_clustering)
+        self.assertFalse(disabled.pha_clustering)
+
 
 class PulseWorkflowNavigationTest(unittest.TestCase):
     def test_can_finish_from_any_step(self) -> None:
@@ -103,6 +115,20 @@ class PulseWorkflowNavigationTest(unittest.TestCase):
         steps = pulse_steps(PulseAnalysisConfig(baseline_drift_correction=True))
 
         self.assertIn(PulseStage.DRIFT_CORRECTED_PHA.value, steps)
+
+    def test_pha_cluster_step_is_enabled_from_config(self) -> None:
+        steps = pulse_steps(PulseAnalysisConfig(pha_clustering=True))
+
+        self.assertIn(PulseStage.PHA_CLUSTER.value, steps)
+        self.assertIn(PulseStage.LOWER_CLUSTER_PHA.value, steps)
+        self.assertLess(
+            steps.index(PulseStage.BASELINE_PHA.value),
+            steps.index(PulseStage.PHA_CLUSTER.value),
+        )
+        self.assertLess(
+            steps.index(PulseStage.PHA_CLUSTER.value),
+            steps.index(PulseStage.LOWER_CLUSTER_PHA.value),
+        )
 
 
 class PulseProgressOutputTest(unittest.TestCase):
@@ -182,6 +208,59 @@ class PulseWorkflowControllerTest(unittest.TestCase):
             self.assertIn("drift slope:", summary)
             self.assertIn("drift reference baseline:", summary)
             self.assertIn("drift fit points:", summary)
+
+    def test_analysis_summary_includes_pha_cluster_result_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                config = PulseAnalysisConfig(
+                    valid_pulse_range_start=1,
+                    valid_pulse_range_stop=2,
+                    valid_pulse_diff_threshold=3,
+                    spectrum_chunk_size=2,
+                    pha_clustering=True,
+                    pha_cluster_boundary=0.0,
+                ).validated()
+                controller = PulseWorkflowController(
+                    pulse_data,
+                    max_points_per_trace=None,
+                    max_traces=None,
+                    config=config,
+                )
+                try:
+                    summary = controller.analysis_summary_text()
+                finally:
+                    controller.ui.close()
+
+            self.assertIn("PHA clustering: enabled", summary)
+            self.assertIn("cluster selected points:", summary)
+            self.assertIn("cluster boundary: 0", summary)
+
+    def test_config_values_include_pha_cluster_controls_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                controller = PulseWorkflowController(
+                    pulse_data,
+                    max_points_per_trace=None,
+                    max_traces=None,
+                    config=PulseAnalysisConfig(
+                        pha_clustering=True,
+                        pha_cluster_pha_min=1.0,
+                        pha_cluster_pha_max=2.0,
+                        pha_cluster_boundary=1.5,
+                    ),
+                )
+                try:
+                    values = controller.config_values()
+                finally:
+                    controller.ui.close()
+
+            self.assertEqual(values["pha_cluster_pha_min"], "1")
+            self.assertEqual(values["pha_cluster_pha_max"], "2")
+            self.assertEqual(values["pha_cluster_boundary"], "1.5")
 
     def test_optional_config_text_limits_float_precision(self) -> None:
         self.assertEqual(
@@ -285,6 +364,50 @@ class PulseAnalysisFunctionTest(unittest.TestCase):
         self.assertEqual(fit_count, 3)
         np.testing.assert_array_equal(fit_mask, np.array([True, True, True]))
         np.testing.assert_allclose(pha_corrected, np.array([12.0, 12.0, 12.0]))
+
+    def test_baseline_drift_correction_can_use_fixed_slope(self) -> None:
+        pha_corrected, slope, intercept, reference_baseline, fit_count, fit_mask = (
+            pulse_analysis.baseline_drift_corrected_pulse_heights(
+                np.array([0.0, 1.0, 2.0]),
+                np.array([10.0, 13.0, 16.0]),
+                enabled=True,
+                fixed_slope=2.0,
+            )
+        )
+
+        self.assertAlmostEqual(slope, 2.0)
+        self.assertAlmostEqual(intercept, 11.0)
+        self.assertAlmostEqual(reference_baseline, 1.0)
+        self.assertEqual(fit_count, 3)
+        np.testing.assert_array_equal(fit_mask, np.array([True, True, True]))
+        np.testing.assert_allclose(pha_corrected, np.array([12.0, 13.0, 14.0]))
+
+    def test_baseline_pha_kmeans_clusters_shifted_parallel_groups(self) -> None:
+        labels, centers, slope, iterations = (
+            pulse_analysis.baseline_pha_kmeans_clusters(
+                baseline=np.array([0.0, 1.0, 2.0, 0.0, 1.0, 2.0]),
+                pha=np.array([10.0, 12.0, 14.0, 20.0, 22.0, 24.0]),
+                fit_mask=np.array([True, True, True, True, True, True]),
+                slope=2.0,
+            )
+        )
+
+        np.testing.assert_array_equal(labels, np.array([0, 0, 0, 1, 1, 1]))
+        np.testing.assert_allclose(centers, np.array([10.0, 20.0]))
+        self.assertAlmostEqual(slope, 2.0)
+        self.assertGreaterEqual(iterations, 1)
+
+    def test_baseline_pha_kmeans_updates_slope_and_c_values(self) -> None:
+        labels, centers, slope, _ = pulse_analysis.baseline_pha_kmeans_clusters(
+            baseline=np.array([0.0, 1.0, 2.0, 0.0, 1.0, 2.0]),
+            pha=np.array([10.0, 13.0, 16.0, 20.0, 23.0, 26.0]),
+            fit_mask=np.array([True, True, True, True, True, True]),
+            slope=0.0,
+        )
+
+        np.testing.assert_array_equal(labels, np.array([0, 0, 0, 1, 1, 1]))
+        self.assertAlmostEqual(slope, 3.0)
+        np.testing.assert_allclose(centers, np.array([10.0, 20.0]))
 
     def test_baseline_drift_correction_can_be_disabled(self) -> None:
         pha_corrected, slope, _, _, fit_count, fit_mask = (
@@ -403,6 +526,8 @@ class PulsePipelineTest(unittest.TestCase):
                 baseline_drift_baseline_max=2.0,
                 baseline_drift_pha_min=10.0,
                 baseline_drift_pha_max=20.0,
+                baseline_drift_clustering=True,
+                baseline_drift_cluster_slope=2.0,
             ).validated()
 
             save_config(config, config_path)
@@ -598,6 +723,151 @@ class PulsePipelineTest(unittest.TestCase):
         finally:
             plt.close(fig)
 
+    def test_pha_cluster_uses_nearby_points_to_resolve_isolated_crossings(
+        self,
+    ) -> None:
+        pha = np.array([10.0] * 10 + [20.0] + [10.0] * 10)
+        selected = np.ones(pha.shape, dtype=bool)
+
+        lower, upper = pulse_analysis.cluster_pha_timeline(pha, selected, boundary=15.0)
+
+        np.testing.assert_array_equal(lower, np.ones(pha.shape, dtype=bool))
+        np.testing.assert_array_equal(upper, np.zeros(pha.shape, dtype=bool))
+
+    def test_pha_cluster_uses_drift_cluster_boundary_when_config_boundary_is_unset(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_drift_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                config = PulseAnalysisConfig(
+                    valid_pulse_range_start=0,
+                    valid_pulse_range_stop=3,
+                    valid_pulse_diff_threshold=0,
+                    spectrum_bins=3,
+                    spectrum_chunk_size=2,
+                    baseline_drift_correction=True,
+                    baseline_drift_clustering=True,
+                    pha_clustering=True,
+                    pha_cluster_boundary=None,
+                ).validated()
+                pipeline = PulsePipeline(PulseDataSource(pulse_data), config)
+                baseline_pha = pipeline.baseline_optimal_filter_pulse_height()
+                cluster = pipeline.pha_cluster()
+
+            self.assertIsNotNone(baseline_pha.drift)
+            assert baseline_pha.drift is not None
+            self.assertIsNotNone(baseline_pha.drift.cluster_boundary)
+            self.assertEqual(cluster.boundary, baseline_pha.drift.cluster_boundary)
+
+    def test_pha_cluster_config_boundary_overrides_drift_cluster_boundary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_drift_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                config = PulseAnalysisConfig(
+                    valid_pulse_range_start=0,
+                    valid_pulse_range_stop=3,
+                    valid_pulse_diff_threshold=0,
+                    spectrum_bins=3,
+                    spectrum_chunk_size=2,
+                    baseline_drift_correction=True,
+                    baseline_drift_clustering=True,
+                    pha_clustering=True,
+                    pha_cluster_boundary=16.0,
+                ).validated()
+                pipeline = PulsePipeline(PulseDataSource(pulse_data), config)
+                cluster = pipeline.pha_cluster()
+
+            self.assertEqual(cluster.boundary, 16.0)
+
+    def test_pha_cluster_splits_selected_timeline_points_by_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_drift_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                config = PulseAnalysisConfig(
+                    valid_pulse_range_start=0,
+                    valid_pulse_range_stop=3,
+                    valid_pulse_diff_threshold=0,
+                    spectrum_bins=3,
+                    spectrum_chunk_size=2,
+                    pha_clustering=True,
+                    pha_cluster_pha_min=12.0,
+                    pha_cluster_pha_max=20.0,
+                    pha_cluster_boundary=16.0,
+                ).validated()
+                pipeline = PulsePipeline(PulseDataSource(pulse_data), config)
+                cluster = pipeline.pha_cluster()
+
+            np.testing.assert_array_equal(
+                cluster.selected_mask,
+                (cluster.pha >= 12.0) & (cluster.pha <= 20.0),
+            )
+            expected_lower, expected_upper = pulse_analysis.cluster_pha_timeline(
+                cluster.pha, cluster.selected_mask, boundary=16.0
+            )
+            np.testing.assert_array_equal(cluster.lower_cluster_mask, expected_lower)
+            np.testing.assert_array_equal(cluster.upper_cluster_mask, expected_upper)
+
+    def test_lower_cluster_pha_histogram_uses_lower_cluster_points(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_drift_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                config = PulseAnalysisConfig(
+                    valid_pulse_range_start=0,
+                    valid_pulse_range_stop=3,
+                    valid_pulse_diff_threshold=0,
+                    spectrum_bins=3,
+                    spectrum_chunk_size=2,
+                    pha_clustering=True,
+                    pha_cluster_pha_min=12.0,
+                    pha_cluster_pha_max=20.0,
+                    pha_cluster_boundary=16.0,
+                ).validated()
+                pipeline = PulsePipeline(PulseDataSource(pulse_data), config)
+                cluster = pipeline.pha_cluster()
+                lower_histogram = pipeline.lower_cluster_optimal_filter_pulse_height()
+
+            np.testing.assert_array_equal(
+                lower_histogram.pha,
+                cluster.pha[cluster.lower_cluster_mask],
+            )
+            self.assertEqual(
+                int(np.sum(lower_histogram.counts)),
+                int(np.count_nonzero(cluster.lower_cluster_mask)),
+            )
+
+    def test_pha_cluster_renderer_draws_cluster_collections(self) -> None:
+        fig, ax = plt.subplots()
+        try:
+            renderer = PulsePlotRenderer.__new__(PulsePlotRenderer)
+            renderer._draw_pha_cluster(
+                ax,
+                PhaClusterResult(
+                    pulse_indices=np.array([0, 1, 2]),
+                    pha=np.array([10.0, 16.0, 22.0]),
+                    selected_mask=np.array([True, True, False]),
+                    lower_cluster_mask=np.array([True, False, False]),
+                    upper_cluster_mask=np.array([False, True, False]),
+                    pha_min=9.0,
+                    pha_max=20.0,
+                    boundary=15.0,
+                    accepted_count=3,
+                    rejected_count=0,
+                    normalization=1.0,
+                ),
+            )
+
+            self.assertGreaterEqual(len(ax.collections), 3)
+            self.assertGreaterEqual(len(ax.lines), 3)
+        finally:
+            plt.close(fig)
+
     def test_baseline_drift_correction_removes_linear_pha_dependence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "pulse.hdf5"
@@ -629,6 +899,33 @@ class PulsePipelineTest(unittest.TestCase):
             )
             np.testing.assert_allclose(corrected.pha, result.drift.pha_corrected)
             self.assertEqual(int(corrected.counts.sum()), result.accepted_count)
+
+    def test_baseline_pha_clustering_records_fit_cluster_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            write_drift_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                config = PulseAnalysisConfig(
+                    valid_pulse_range_start=0,
+                    valid_pulse_range_stop=3,
+                    valid_pulse_diff_threshold=0,
+                    spectrum_bins=3,
+                    spectrum_chunk_size=2,
+                    baseline_drift_correction=True,
+                    baseline_drift_clustering=True,
+                ).validated()
+                pipeline = PulsePipeline(PulseDataSource(pulse_data), config)
+                result = pipeline.baseline_optimal_filter_pulse_height()
+
+            self.assertIsNotNone(result.drift)
+            assert result.drift is not None
+            self.assertIsNotNone(result.drift.cluster_labels)
+            assert result.drift.cluster_labels is not None
+            self.assertEqual(result.drift.cluster_labels.shape, result.pha.shape)
+            self.assertEqual(
+                int(np.count_nonzero(result.drift.cluster_labels >= 0)),
+                result.drift.fit_count,
+            )
 
     def test_baseline_drift_correction_disabled_uses_raw_pha(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -721,6 +1018,14 @@ class PulsePipelineTest(unittest.TestCase):
                 self.assertIs(
                     pipeline.result_for_stage(PulseStage.PHA_TIMELINE.value),
                     pipeline.pha_timeline(),
+                )
+                self.assertIs(
+                    pipeline.result_for_stage(PulseStage.PHA_CLUSTER.value),
+                    pipeline.pha_cluster(),
+                )
+                self.assertIs(
+                    pipeline.result_for_stage(PulseStage.LOWER_CLUSTER_PHA.value),
+                    pipeline.lower_cluster_optimal_filter_pulse_height(),
                 )
                 self.assertIs(
                     pipeline.result_for_stage(PulseStage.BASELINE_PHA.value),
@@ -836,6 +1141,32 @@ class PulsePipelineTest(unittest.TestCase):
             self.assertIn("optimal-filter-baseline-pulse-height.csv", names)
             self.assertNotIn("optimal-filter-drift-corrected-pulse-height.csv", names)
             self.assertNotIn("pulse-results.npy", names)
+
+    def test_save_pulse_plots_includes_pha_cluster_outputs_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "pulse.hdf5"
+            output_dir = Path(tmpdir) / "outputs"
+            write_test_hdf5(input_path)
+            with open_hdf5_pulse_data(input_path) as pulse_data:
+                paths = save_pulse_plots(
+                    pulse_data,
+                    output_dir,
+                    steps=(),
+                    config=PulseAnalysisConfig(
+                        valid_pulse_range_start=1,
+                        valid_pulse_range_stop=2,
+                        valid_pulse_diff_threshold=3,
+                        spectrum_bins=3,
+                        spectrum_chunk_size=2,
+                        pha_clustering=True,
+                        pha_cluster_boundary=0.0,
+                    ),
+                    array_format="csv",
+                )
+
+            names = {path.name for path in paths}
+            self.assertIn("optimal-filter-pha-cluster.csv", names)
+            self.assertIn("optimal-filter-lower-cluster-pulse-height.csv", names)
 
 
 if __name__ == "__main__":

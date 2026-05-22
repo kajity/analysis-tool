@@ -10,27 +10,29 @@ from matplotlib.widgets import RectangleSelector
 try:
     from .datasource import HORIZONTAL_RESOLUTION_DATASET, VERTICAL_RESOLUTION_DATASET
     from .pipeline import (
-        BaselineOptimalFilterHeightResult,
-        OptimalFilterHeightResult,
+        BaselinePhaResult,
         OptimalFilterPrepResult,
+        PhaClusterResult,
+        PhaSpectrumResult,
         PhaTimelineResult,
+        PhSpectrumResult,
         PulsePipeline,
         PulseStage,
         RejectionResult,
-        SpectrumResult,
         TracePlotResult,
     )
 except ImportError:
     from datasource import HORIZONTAL_RESOLUTION_DATASET, VERTICAL_RESOLUTION_DATASET
     from pipeline import (
-        BaselineOptimalFilterHeightResult,
-        OptimalFilterHeightResult,
+        BaselinePhaResult,
         OptimalFilterPrepResult,
+        PhaClusterResult,
+        PhaSpectrumResult,
         PhaTimelineResult,
+        PhSpectrumResult,
         PulsePipeline,
         PulseStage,
         RejectionResult,
-        SpectrumResult,
         TracePlotResult,
     )
 
@@ -65,13 +67,15 @@ class PulsePlotRenderer:
             self._draw_traces(ax, result)
         elif isinstance(result, RejectionResult):
             self._draw_rejection(ax, result)
-        elif isinstance(result, SpectrumResult):
+        elif isinstance(result, PhSpectrumResult):
             self._draw_spectrum(ax, result)
-        elif isinstance(result, OptimalFilterHeightResult):
+        elif isinstance(result, PhaSpectrumResult):
             self._draw_optimal_filter_height(ax, result)
         elif isinstance(result, PhaTimelineResult):
             self._draw_pha_timeline(ax, result)
-        elif isinstance(result, BaselineOptimalFilterHeightResult):
+        elif isinstance(result, PhaClusterResult):
+            self._draw_pha_cluster(ax, result)
+        elif isinstance(result, BaselinePhaResult):
             self._draw_baseline_optimal_filter_height(ax, result)
         elif isinstance(result, OptimalFilterPrepResult):
             self._draw_optimal_filter(ax, stage, result)
@@ -106,7 +110,7 @@ class PulsePlotRenderer:
             return
         ax.plot(sample_times, traces.T, alpha=0.25)
 
-    def _draw_spectrum(self, ax: Axes, result: SpectrumResult) -> None:
+    def _draw_spectrum(self, ax: Axes, result: PhSpectrumResult) -> None:
         ax.set_xlabel(f"Pulse height (ADC count * {VERTICAL_RESOLUTION_DATASET})")
         ax.set_ylabel("Counts")
         if result.counts.size == 0:
@@ -189,7 +193,7 @@ class PulsePlotRenderer:
     def _draw_optimal_filter_height(
         self,
         ax: Axes,
-        result: OptimalFilterHeightResult,
+        result: PhaSpectrumResult,
     ) -> None:
         ax.set_xlabel(
             f"Optimized pulse height (ADC count * {VERTICAL_RESOLUTION_DATASET})"
@@ -227,10 +231,75 @@ class PulsePlotRenderer:
             linewidths=0,
         )
 
+    def _draw_pha_cluster(
+        self,
+        ax: Axes,
+        result: PhaClusterResult,
+    ) -> None:
+        ax.set_xlabel("Accepted pulse index")
+        ax.set_ylabel(
+            f"Optimized pulse height (ADC count * {VERTICAL_RESOLUTION_DATASET})"
+        )
+        if result.pha.size == 0:
+            self._draw_empty_optimal_filter(ax)
+            return
+        excluded = ~result.selected_mask
+        if np.any(excluded):
+            ax.scatter(
+                result.pulse_indices[excluded],
+                result.pha[excluded],
+                s=8,
+                alpha=0.25,
+                linewidths=0,
+                color="0.55",
+                label="excluded",
+            )
+        if np.any(result.lower_cluster_mask):
+            ax.scatter(
+                result.pulse_indices[result.lower_cluster_mask],
+                result.pha[result.lower_cluster_mask],
+                s=12,
+                alpha=0.85,
+                linewidths=0,
+                color="tab:blue",
+                label="lower cluster",
+            )
+        if np.any(result.upper_cluster_mask):
+            ax.scatter(
+                result.pulse_indices[result.upper_cluster_mask],
+                result.pha[result.upper_cluster_mask],
+                s=12,
+                alpha=0.85,
+                linewidths=0,
+                color="tab:orange",
+                label="upper cluster",
+            )
+        if result.boundary is not None:
+            ax.axhline(
+                result.boundary,
+                color="tab:red",
+                linestyle="--",
+                linewidth=1.2,
+                label=f"boundary={result.boundary:.3g}",
+            )
+        for value, label in (
+            (result.pha_min, "PHA min"),
+            (result.pha_max, "PHA max"),
+        ):
+            if value is not None:
+                ax.axhline(
+                    value,
+                    color="0.35",
+                    linestyle=":",
+                    linewidth=0.9,
+                    label=f"{label}={value:.3g}",
+                )
+        ax.legend(loc="best", framealpha=0.9, fontsize="small")
+
     def _draw_baseline_optimal_filter_height(
         self,
         ax: Axes,
-        result: BaselineOptimalFilterHeightResult,
+        result: BaselinePhaResult,
     ) -> None:
         ax.set_xlabel(f"Baseline average (ADC count * {VERTICAL_RESOLUTION_DATASET})")
         ax.set_ylabel(
@@ -251,7 +320,23 @@ class PulsePlotRenderer:
         drift = result.drift
         if drift is not None:
             fit_mask = drift.fit_mask & finite
-            if np.any(fit_mask):
+            if drift.cluster_labels is not None:
+                for cluster_index, color in (
+                    (0, "tab:blue"),
+                    (1, "tab:orange"),
+                ):
+                    cluster_mask = fit_mask & (drift.cluster_labels == cluster_index)
+                    if np.any(cluster_mask):
+                        ax.scatter(
+                            result.baseline[cluster_mask],
+                            result.pha[cluster_mask],
+                            s=14,
+                            alpha=0.78,
+                            linewidths=0,
+                            color=color,
+                            label=f"drift cluster {cluster_index + 1}",
+                        )
+            elif np.any(fit_mask):
                 ax.scatter(
                     result.baseline[fit_mask],
                     result.pha[fit_mask],

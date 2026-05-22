@@ -44,17 +44,33 @@ class PulseWizardUI:
         "histogram_min": (0.81, 0.265, 0.10, 0.030),
         "histogram_max": (0.81, 0.220, 0.10, 0.030),
     }
-    DRIFT_CONTROL_LAYOUT = {
+    EXTENDED_CONTROL_LAYOUT = {
         "spectrum_bins": (0.81, 0.455, 0.10, 0.030),
         "histogram_min": (0.81, 0.415, 0.10, 0.030),
         "histogram_max": (0.81, 0.375, 0.10, 0.030),
+        "pha_cluster_pha_min": (0.81, 0.335, 0.10, 0.030),
+        "pha_cluster_pha_max": (0.81, 0.295, 0.10, 0.030),
+        "pha_cluster_boundary": (0.81, 0.255, 0.10, 0.030),
         "baseline_drift_baseline_min": (0.81, 0.335, 0.10, 0.030),
         "baseline_drift_baseline_max": (0.81, 0.295, 0.10, 0.030),
         "baseline_drift_pha_min": (0.81, 0.255, 0.10, 0.030),
         "baseline_drift_pha_max": (0.81, 0.215, 0.10, 0.030),
     }
+    FULL_CONTROL_LAYOUT = {
+        "spectrum_bins": (0.75, 0.455, 0.07, 0.030),
+        "histogram_min": (0.75, 0.415, 0.07, 0.030),
+        "histogram_max": (0.88, 0.415, 0.07, 0.030),
+        "pha_cluster_pha_min": (0.75, 0.375, 0.07, 0.030),
+        "pha_cluster_pha_max": (0.88, 0.375, 0.07, 0.030),
+        "pha_cluster_boundary": (0.75, 0.335, 0.07, 0.030),
+        "baseline_drift_baseline_min": (0.75, 0.295, 0.07, 0.030),
+        "baseline_drift_baseline_max": (0.88, 0.295, 0.07, 0.030),
+        "baseline_drift_pha_min": (0.75, 0.255, 0.07, 0.030),
+        "baseline_drift_pha_max": (0.88, 0.255, 0.07, 0.030),
+    }
     STANDARD_APPLY_BUTTON_BOUNDS = (0.81, 0.170, 0.10, 0.038)
-    DRIFT_APPLY_BUTTON_BOUNDS = (0.81, 0.165, 0.10, 0.038)
+    EXTENDED_APPLY_BUTTON_BOUNDS = (0.81, 0.165, 0.10, 0.038)
+    FULL_APPLY_BUTTON_BOUNDS = (0.81, 0.205, 0.10, 0.038)
 
     STEP_BUTTON_LABELS = {
         "Raw View": "Raw",
@@ -65,6 +81,8 @@ class PulseWizardUI:
         "Optimal Filter Template": "Template",
         "PHA": "PHA",
         "PHA Timeline": "PHA Timeline",
+        "PHA Cluster": "PHA Cluster",
+        "Lower Cluster PHA": "Lower PHA",
         "Baseline/PHA": "Baseline/PHA",
         "Drift-Corrected PHA": "Drift PHA",
     }
@@ -87,20 +105,32 @@ class PulseWizardUI:
             "histogram_max": self._make_text_box(
                 self.STANDARD_CONTROL_LAYOUT["histogram_max"], "max"
             ),
+            "pha_cluster_pha_min": self._make_text_box(
+                self.EXTENDED_CONTROL_LAYOUT["pha_cluster_pha_min"],
+                "c min",
+            ),
+            "pha_cluster_pha_max": self._make_text_box(
+                self.EXTENDED_CONTROL_LAYOUT["pha_cluster_pha_max"],
+                "c max",
+            ),
+            "pha_cluster_boundary": self._make_text_box(
+                self.EXTENDED_CONTROL_LAYOUT["pha_cluster_boundary"],
+                "bound",
+            ),
             "baseline_drift_baseline_min": self._make_text_box(
-                self.DRIFT_CONTROL_LAYOUT["baseline_drift_baseline_min"],
+                self.EXTENDED_CONTROL_LAYOUT["baseline_drift_baseline_min"],
                 "b min",
             ),
             "baseline_drift_baseline_max": self._make_text_box(
-                self.DRIFT_CONTROL_LAYOUT["baseline_drift_baseline_max"],
+                self.EXTENDED_CONTROL_LAYOUT["baseline_drift_baseline_max"],
                 "b max",
             ),
             "baseline_drift_pha_min": self._make_text_box(
-                self.DRIFT_CONTROL_LAYOUT["baseline_drift_pha_min"],
+                self.EXTENDED_CONTROL_LAYOUT["baseline_drift_pha_min"],
                 "p min",
             ),
             "baseline_drift_pha_max": self._make_text_box(
-                self.DRIFT_CONTROL_LAYOUT["baseline_drift_pha_max"],
+                self.EXTENDED_CONTROL_LAYOUT["baseline_drift_pha_max"],
                 "p max",
             ),
         }
@@ -224,14 +254,17 @@ class PulseWizardUI:
         drift_controls_visible = any(
             key.startswith("baseline_drift_") for key in state.config_values
         )
-        control_layout = (
-            self.DRIFT_CONTROL_LAYOUT
-            if drift_controls_visible
-            else self.STANDARD_CONTROL_LAYOUT
+        cluster_controls_visible = any(
+            key.startswith("pha_cluster_") for key in state.config_values
         )
-        if drift_controls_visible:
-            self.apply_button.ax.set_position(self.DRIFT_APPLY_BUTTON_BOUNDS)
+        if drift_controls_visible and cluster_controls_visible:
+            control_layout = self.FULL_CONTROL_LAYOUT
+            self.apply_button.ax.set_position(self.FULL_APPLY_BUTTON_BOUNDS)
+        elif drift_controls_visible or cluster_controls_visible:
+            control_layout = self.EXTENDED_CONTROL_LAYOUT
+            self.apply_button.ax.set_position(self.EXTENDED_APPLY_BUTTON_BOUNDS)
         else:
+            control_layout = self.STANDARD_CONTROL_LAYOUT
             self.apply_button.ax.set_position(self.STANDARD_APPLY_BUTTON_BOUNDS)
         for key, text_box in self.control_boxes.items():
             visible = key in state.config_values

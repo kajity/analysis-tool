@@ -65,6 +65,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_false",
         help="Disable baseline/PHA drift correction and use the original UI steps.",
     )
+    cluster_group = parser.add_mutually_exclusive_group()
+    cluster_group.add_argument(
+        "-p",
+        "--pha-clustering",
+        dest="pha_clustering",
+        action="store_true",
+        default=None,
+        help="Enable PHA timeline clustering controls and stage.",
+    )
+    cluster_group.add_argument(
+        "-n-p",
+        "--no-pha-clustering",
+        dest="pha_clustering",
+        action="store_false",
+        help="Disable the PHA timeline clustering stage.",
+    )
     parser.add_argument(
         "--max-items",
         type=int,
@@ -105,6 +121,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             config = config.with_updates(
                 baseline_drift_correction=args.baseline_drift_correction
             )
+        if args.pha_clustering is not None:
+            config = config.with_updates(pha_clustering=args.pha_clustering)
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1

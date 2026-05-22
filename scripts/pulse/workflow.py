@@ -17,7 +17,7 @@ try:
         save_config,
     )
     from .datasource import PulseDataSource
-    from .pipeline import DEFAULT_STAGES, DRIFT_CORRECTION_STAGES, PulsePipeline
+    from .pipeline import DEFAULT_STAGES, PulsePipeline, PulseStage
     from .pulse_io import Hdf5PulseData, format_hdf5_summary
     from .rendering import PulsePlotRenderer
     from .ui import PulseViewState, PulseWizardUI
@@ -29,7 +29,7 @@ except ImportError:
         save_config,
     )
     from datasource import PulseDataSource
-    from pipeline import DEFAULT_STAGES, DRIFT_CORRECTION_STAGES, PulsePipeline
+    from pipeline import DEFAULT_STAGES, PulsePipeline, PulseStage
     from pulse_io import Hdf5PulseData, format_hdf5_summary
     from rendering import PulsePlotRenderer
     from ui import PulseViewState, PulseWizardUI
@@ -80,6 +80,17 @@ STEP_INFO_TEXT = {
         "Accepted-pulse PHA values are plotted in the same order as the pulse "
         "array, using accepted pulse index on the horizontal axis."
     ),
+    "PHA Cluster": (
+        "PHA Cluster\n\n"
+        "The drift-corrected PHA timeline is filtered by the configured PHA "
+        "range, then each selected point is assigned to a lower or upper cluster "
+        "from the boundary and its adjacent selected points."
+    ),
+    "Lower Cluster PHA": (
+        "Lower Cluster PHA\n\n"
+        "Only PHA values assigned to the lower cluster are counted in histogram "
+        "bins. The bins, min, and max controls set the histogram range."
+    ),
     "Baseline/PHA": (
         "Baseline/PHA\n\n"
         "The background-window average for each accepted trace is plotted against "
@@ -94,9 +105,17 @@ STEP_INFO_TEXT = {
 
 
 def pulse_steps(config: PulseAnalysisConfig) -> tuple[str, ...]:
+    steps = list(DEFAULT_STEPS)
     if config.baseline_drift_correction:
-        return DRIFT_CORRECTION_STAGES
-    return DEFAULT_STEPS
+        steps.append(PulseStage.DRIFT_CORRECTED_PHA.value)
+    if config.pha_clustering:
+        steps.extend(
+            [
+                PulseStage.PHA_CLUSTER.value,
+                PulseStage.LOWER_CLUSTER_PHA.value,
+            ]
+        )
+    return tuple(steps)
 
 
 @dataclass
@@ -288,8 +307,28 @@ class PulseWorkflowController:
                     f"drift fit points: {baseline_pha.drift.fit_count}",
                 ]
             )
+            if baseline_pha.drift.cluster_labels is not None:
+                lines.extend(
+                    [
+                        "baseline/PHA clustering: enabled",
+                        f"baseline/PHA cluster 1 points: {int(np.count_nonzero(baseline_pha.drift.cluster_labels == 0))}",
+                        f"baseline/PHA cluster 2 points: {int(np.count_nonzero(baseline_pha.drift.cluster_labels == 1))}",
+                    ]
+                )
         else:
             lines.append("drift correction: disabled")
+        if self.config.pha_clustering:
+            cluster = self.pipeline.pha_cluster()
+            lines.extend(
+                [
+                    "PHA clustering: enabled",
+                    f"cluster selected points: {int(np.count_nonzero(cluster.selected_mask))}",
+                    f"lower cluster points: {int(np.count_nonzero(cluster.lower_cluster_mask))}",
+                    f"upper cluster points: {int(np.count_nonzero(cluster.upper_cluster_mask))}",
+                ]
+            )
+            if cluster.boundary is not None:
+                lines.append(f"cluster boundary: {cluster.boundary:g}")
         return "\n".join(lines)
 
     def apply_baseline_drift_range(
@@ -336,6 +375,20 @@ class PulseWorkflowController:
             "histogram_min": self._optional_config_text(values["histogram_min"]),
             "histogram_max": self._optional_config_text(values["histogram_max"]),
         }
+        if self.config.pha_clustering:
+            config_values.update(
+                {
+                    "pha_cluster_pha_min": self._optional_config_text(
+                        values["pha_cluster_pha_min"]
+                    ),
+                    "pha_cluster_pha_max": self._optional_config_text(
+                        values["pha_cluster_pha_max"]
+                    ),
+                    "pha_cluster_boundary": self._optional_config_text(
+                        values["pha_cluster_boundary"]
+                    ),
+                }
+            )
         if self.config.baseline_drift_correction:
             config_values.update(
                 {
@@ -487,11 +540,30 @@ def _optimal_filter_output_columns(
             "pha": baseline_pha.pha,
         },
     }
+    if pipeline.config.pha_clustering:
+        cluster = pipeline.pha_cluster()
+        outputs["optimal_filter_pha_cluster"] = {
+            "pulse_index": cluster.pulse_indices,
+            "pha": cluster.pha,
+            "selected": cluster.selected_mask.astype(int),
+            "lower_cluster": cluster.lower_cluster_mask.astype(int),
+            "upper_cluster": cluster.upper_cluster_mask.astype(int),
+        }
+        lower_cluster_pha = pipeline.lower_cluster_optimal_filter_pulse_height()
+        outputs["optimal_filter_lower_cluster_pulse_height"] = {
+            "bin_left": lower_cluster_pha.bin_edges[:-1],
+            "bin_right": lower_cluster_pha.bin_edges[1:],
+            "count": lower_cluster_pha.counts,
+        }
     if baseline_pha.drift is not None:
         drift_corrected = pipeline.drift_corrected_optimal_filter_pulse_height()
         outputs["optimal_filter_baseline_pulse_height"][
             "pha_corrected"
         ] = baseline_pha.drift.pha_corrected
+        if baseline_pha.drift.cluster_labels is not None:
+            outputs["optimal_filter_baseline_pulse_height"][
+                "drift_cluster"
+            ] = baseline_pha.drift.cluster_labels
         outputs["optimal_filter_drift_correction"] = {
             "enabled": np.array([True]),
             "slope": np.array([baseline_pha.drift.slope]),
@@ -575,6 +647,20 @@ def _save_csv_outputs(
         pha_timeline_path,
         baseline_pha_path,
     ]
+    if "optimal_filter_pha_cluster" in optimal_filter_outputs:
+        paths.append(
+            _save_table_csv(
+                output_dir / "optimal-filter-pha-cluster.csv",
+                optimal_filter_outputs["optimal_filter_pha_cluster"],
+            )
+        )
+    if "optimal_filter_lower_cluster_pulse_height" in optimal_filter_outputs:
+        paths.append(
+            _save_table_csv(
+                output_dir / "optimal-filter-lower-cluster-pulse-height.csv",
+                optimal_filter_outputs["optimal_filter_lower_cluster_pulse_height"],
+            )
+        )
     if "optimal_filter_drift_corrected_pulse_height" in optimal_filter_outputs:
         paths.append(
             _save_table_csv(

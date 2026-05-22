@@ -25,6 +25,12 @@ class PulseAnalysisConfig:
     baseline_drift_baseline_max: float | None = None
     baseline_drift_pha_min: float | None = None
     baseline_drift_pha_max: float | None = None
+    baseline_drift_clustering: bool = False
+    baseline_drift_cluster_slope: float | None = None
+    pha_clustering: bool = False
+    pha_cluster_pha_min: float | None = None
+    pha_cluster_pha_max: float | None = None
+    pha_cluster_boundary: float | None = None
 
     def validated(self) -> PulseAnalysisConfig:
         if self.max_points_per_trace is not None and self.max_points_per_trace < 1:
@@ -68,6 +74,14 @@ class PulseAnalysisConfig:
         ):
             raise ValueError(
                 "baseline_drift_pha_max must be greater than baseline_drift_pha_min."
+            )
+        if (
+            self.pha_cluster_pha_min is not None
+            and self.pha_cluster_pha_max is not None
+            and self.pha_cluster_pha_max <= self.pha_cluster_pha_min
+        ):
+            raise ValueError(
+                "pha_cluster_pha_max must be greater than pha_cluster_pha_min."
             )
         return self
 
@@ -128,12 +142,18 @@ def parse_config_updates(
             "baseline_drift_baseline_max",
             "baseline_drift_pha_min",
             "baseline_drift_pha_max",
+            "baseline_drift_cluster_slope",
+            "pha_cluster_pha_min",
+            "pha_cluster_pha_max",
+            "pha_cluster_boundary",
         }:
             parsed[key] = None if text.lower() in {"", "none", "null"} else float(text)
         elif key in {
             "negative_pulses",
             "optimal_filter_template_normalize",
             "baseline_drift_correction",
+            "baseline_drift_clustering",
+            "pha_clustering",
         }:
             parsed[key] = text.lower() in {"1", "true", "yes", "on"}
         else:
