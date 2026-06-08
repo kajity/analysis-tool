@@ -190,6 +190,7 @@ class PulsePipeline:
             "baseline_drift_pha_min",
             "baseline_drift_pha_max",
             "baseline_drift_clustering",
+            "baseline_drift_cluster_count",
             "baseline_drift_cluster_slope",
         }
         pha_cluster_keys = {
@@ -537,6 +538,7 @@ class PulsePipeline:
                         pha,
                         drift_fit_mask,
                         drift_slope,
+                        cluster_count=self.config.baseline_drift_cluster_count,
                     )
                     drift_slope = cluster_slope
                     finite = np.isfinite(baseline) & np.isfinite(pha)
@@ -783,23 +785,6 @@ class PulsePipeline:
             return None
         return drift.cluster_boundary
 
-    def spectrum(self) -> PhSpectrumResult:
-        return self.ph_spectrum()
-
-    def optimal_filter_pulse_height(self) -> PhaSpectrumResult:
-        return self.pha_spectrum()
-
-    def lower_cluster_optimal_filter_pulse_height(self) -> PhaSpectrumResult:
-        return self.lower_cluster_pha_spectrum()
-
-    def drift_corrected_optimal_filter_pulse_height(self) -> PhaSpectrumResult:
-        return self.drift_corrected_pha_spectrum()
-
-    def baseline_optimal_filter_pulse_height(
-        self,
-    ) -> BaselinePhaResult:
-        return self.baseline_pha()
-
     def status_text(self, stage: str) -> str:
         config = self.config
         lines = [
@@ -819,6 +804,7 @@ class PulsePipeline:
                     f"drift baseline range: {self._range_text(config.baseline_drift_baseline_min, config.baseline_drift_baseline_max)}",
                     f"drift PHA range: {self._range_text(config.baseline_drift_pha_min, config.baseline_drift_pha_max)}",
                     f"baseline/PHA clustering: {config.baseline_drift_clustering}",
+                    f"baseline/PHA cluster count: {config.baseline_drift_cluster_count}",
                     f"baseline/PHA cluster slope: {self._optional_number_text(config.baseline_drift_cluster_slope)}",
                 ]
             )

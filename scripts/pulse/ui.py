@@ -55,6 +55,7 @@ class PulseWizardUI:
         "baseline_drift_baseline_max": (0.81, 0.295, 0.10, 0.030),
         "baseline_drift_pha_min": (0.81, 0.255, 0.10, 0.030),
         "baseline_drift_pha_max": (0.81, 0.215, 0.10, 0.030),
+        "baseline_drift_cluster_count": (0.81, 0.175, 0.10, 0.030),
     }
     FULL_CONTROL_LAYOUT = {
         "spectrum_bins": (0.75, 0.455, 0.07, 0.030),
@@ -67,10 +68,11 @@ class PulseWizardUI:
         "baseline_drift_baseline_max": (0.88, 0.295, 0.07, 0.030),
         "baseline_drift_pha_min": (0.75, 0.255, 0.07, 0.030),
         "baseline_drift_pha_max": (0.88, 0.255, 0.07, 0.030),
+        "baseline_drift_cluster_count": (0.75, 0.215, 0.07, 0.030),
     }
     STANDARD_APPLY_BUTTON_BOUNDS = (0.81, 0.170, 0.10, 0.038)
-    EXTENDED_APPLY_BUTTON_BOUNDS = (0.81, 0.165, 0.10, 0.038)
-    FULL_APPLY_BUTTON_BOUNDS = (0.81, 0.205, 0.10, 0.038)
+    EXTENDED_APPLY_BUTTON_BOUNDS = (0.81, 0.125, 0.10, 0.038)
+    FULL_APPLY_BUTTON_BOUNDS = (0.81, 0.165, 0.10, 0.038)
 
     STEP_BUTTON_LABELS = {
         "Raw View": "Raw",
@@ -132,6 +134,10 @@ class PulseWizardUI:
             "baseline_drift_pha_max": self._make_text_box(
                 self.EXTENDED_CONTROL_LAYOUT["baseline_drift_pha_max"],
                 "p max",
+            ),
+            "baseline_drift_cluster_count": self._make_text_box(
+                self.EXTENDED_CONTROL_LAYOUT["baseline_drift_cluster_count"],
+                "k",
             ),
         }
         self.apply_button = self._make_button(

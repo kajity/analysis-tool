@@ -26,6 +26,7 @@ class PulseAnalysisConfig:
     baseline_drift_pha_min: float | None = None
     baseline_drift_pha_max: float | None = None
     baseline_drift_clustering: bool = False
+    baseline_drift_cluster_count: int = 2
     baseline_drift_cluster_slope: float | None = None
     pha_clustering: bool = False
     pha_cluster_pha_min: float | None = None
@@ -75,6 +76,8 @@ class PulseAnalysisConfig:
             raise ValueError(
                 "baseline_drift_pha_max must be greater than baseline_drift_pha_min."
             )
+        if self.baseline_drift_cluster_count < 2:
+            raise ValueError("baseline_drift_cluster_count must be at least 2.")
         if (
             self.pha_cluster_pha_min is not None
             and self.pha_cluster_pha_max is not None
@@ -126,9 +129,13 @@ def parse_config_updates(
         if key in {
             "max_points_per_trace",
             "max_display_traces",
-            "spectrum_chunk_size",
         }:
             parsed[key] = None if text.lower() in {"", "none", "null"} else int(text)
+        elif key in {
+            "spectrum_chunk_size",
+            "baseline_drift_cluster_count",
+        }:
+            parsed[key] = int(text)
         elif key in {"valid_pulse_range_start", "valid_pulse_range_stop"}:
             parsed[key] = int(text)
         elif key == "valid_pulse_diff_threshold":

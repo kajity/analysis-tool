@@ -230,10 +230,8 @@ def baseline_pha_kmeans_clusters(
     are returned for the full input length. Points outside `fit_mask` are
     assigned -1. Cluster labels are ordered by centroid from low to high.
     """
-    if cluster_count != 2:
-        raise ValueError(
-            "baseline/PHA clustering currently supports exactly 2 classes."
-        )
+    if cluster_count < 1:
+        raise ValueError("cluster_count must be positive.")
     baseline_values = np.asarray(baseline, dtype=float)
     pha_values = np.asarray(pha, dtype=float)
     selected = (

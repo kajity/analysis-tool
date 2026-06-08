@@ -276,7 +276,7 @@ class PulseWorkflowController:
             self.ui.close()
 
     def analysis_summary_text(self) -> str:
-        baseline_pha = self.pipeline.baseline_optimal_filter_pulse_height()
+        baseline_pha = self.pipeline.baseline_pha()
         pha = (
             baseline_pha.drift.pha_corrected
             if baseline_pha.drift is not None
@@ -308,13 +308,15 @@ class PulseWorkflowController:
                 ]
             )
             if baseline_pha.drift.cluster_labels is not None:
-                lines.extend(
-                    [
-                        "baseline/PHA clustering: enabled",
-                        f"baseline/PHA cluster 1 points: {int(np.count_nonzero(baseline_pha.drift.cluster_labels == 0))}",
-                        f"baseline/PHA cluster 2 points: {int(np.count_nonzero(baseline_pha.drift.cluster_labels == 1))}",
-                    ]
+                lines.append("baseline/PHA clustering: enabled")
+                lines.append(
+                    f"baseline/PHA cluster count: {self.config.baseline_drift_cluster_count}"
                 )
+                for cluster_index in range(self.config.baseline_drift_cluster_count):
+                    lines.append(
+                        f"baseline/PHA cluster {cluster_index + 1} points: "
+                        f"{int(np.count_nonzero(baseline_pha.drift.cluster_labels == cluster_index))}"
+                    )
         else:
             lines.append("drift correction: disabled")
         if self.config.pha_clustering:
@@ -390,22 +392,25 @@ class PulseWorkflowController:
                 }
             )
         if self.config.baseline_drift_correction:
-            config_values.update(
-                {
-                    "baseline_drift_baseline_min": self._optional_config_text(
-                        values["baseline_drift_baseline_min"]
-                    ),
-                    "baseline_drift_baseline_max": self._optional_config_text(
-                        values["baseline_drift_baseline_max"]
-                    ),
-                    "baseline_drift_pha_min": self._optional_config_text(
-                        values["baseline_drift_pha_min"]
-                    ),
-                    "baseline_drift_pha_max": self._optional_config_text(
-                        values["baseline_drift_pha_max"]
-                    ),
-                }
-            )
+            drift_values = {
+                "baseline_drift_baseline_min": self._optional_config_text(
+                    values["baseline_drift_baseline_min"]
+                ),
+                "baseline_drift_baseline_max": self._optional_config_text(
+                    values["baseline_drift_baseline_max"]
+                ),
+                "baseline_drift_pha_min": self._optional_config_text(
+                    values["baseline_drift_pha_min"]
+                ),
+                "baseline_drift_pha_max": self._optional_config_text(
+                    values["baseline_drift_pha_max"]
+                ),
+            }
+            if self.config.baseline_drift_clustering:
+                drift_values["baseline_drift_cluster_count"] = str(
+                    values["baseline_drift_cluster_count"]
+                )
+            config_values.update(drift_values)
         return config_values
 
     def _optional_config_text(self, value: object) -> str:
@@ -493,7 +498,7 @@ def _save_table_csv(output_path: Path, columns: dict[str, np.ndarray]) -> Path:
 
 
 def _spectrum_columns(pipeline: PulsePipeline) -> dict[str, np.ndarray]:
-    spectrum = pipeline.spectrum()
+    spectrum = pipeline.ph_spectrum()
     return {
         "bin_left": spectrum.bin_edges[:-1],
         "bin_right": spectrum.bin_edges[1:],
@@ -505,8 +510,8 @@ def _optimal_filter_output_columns(
     pipeline: PulsePipeline,
 ) -> dict[str, dict[str, np.ndarray]]:
     prep = pipeline.optimal_filter_prep()
-    heights = pipeline.optimal_filter_pulse_height()
-    baseline_pha = pipeline.baseline_optimal_filter_pulse_height()
+    heights = pipeline.pha_spectrum()
+    baseline_pha = pipeline.baseline_pha()
     pha_timeline = pipeline.pha_timeline()
     outputs = {
         "optimal_filter_template": {
@@ -549,14 +554,14 @@ def _optimal_filter_output_columns(
             "lower_cluster": cluster.lower_cluster_mask.astype(int),
             "upper_cluster": cluster.upper_cluster_mask.astype(int),
         }
-        lower_cluster_pha = pipeline.lower_cluster_optimal_filter_pulse_height()
+        lower_cluster_pha = pipeline.lower_cluster_pha_spectrum()
         outputs["optimal_filter_lower_cluster_pulse_height"] = {
             "bin_left": lower_cluster_pha.bin_edges[:-1],
             "bin_right": lower_cluster_pha.bin_edges[1:],
             "count": lower_cluster_pha.counts,
         }
     if baseline_pha.drift is not None:
-        drift_corrected = pipeline.drift_corrected_optimal_filter_pulse_height()
+        drift_corrected = pipeline.drift_corrected_pha_spectrum()
         outputs["optimal_filter_baseline_pulse_height"][
             "pha_corrected"
         ] = baseline_pha.drift.pha_corrected

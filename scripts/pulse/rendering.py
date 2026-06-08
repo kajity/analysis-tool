@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
+import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.widgets import RectangleSelector
 
@@ -321,10 +322,20 @@ class PulsePlotRenderer:
         if drift is not None:
             fit_mask = drift.fit_mask & finite
             if drift.cluster_labels is not None:
-                for cluster_index, color in (
-                    (0, "tab:blue"),
-                    (1, "tab:orange"),
-                ):
+                colors = (
+                    plt.rcParams["axes.prop_cycle"]
+                    .by_key()
+                    .get(
+                        "color",
+                        ["tab:blue", "tab:orange", "tab:green", "tab:red"],
+                    )
+                )
+                cluster_count = (
+                    drift.cluster_centers.size
+                    if drift.cluster_centers is not None
+                    else int(np.max(drift.cluster_labels)) + 1
+                )
+                for cluster_index in range(cluster_count):
                     cluster_mask = fit_mask & (drift.cluster_labels == cluster_index)
                     if np.any(cluster_mask):
                         ax.scatter(
@@ -333,7 +344,7 @@ class PulsePlotRenderer:
                             s=14,
                             alpha=0.78,
                             linewidths=0,
-                            color=color,
+                            color=colors[cluster_index % len(colors)],
                             label=f"drift cluster {cluster_index + 1}",
                         )
             elif np.any(fit_mask):
